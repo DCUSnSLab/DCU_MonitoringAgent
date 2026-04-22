@@ -54,10 +54,12 @@ class ApiClient:
         self._registered = False
 
         # 오프라인 버퍼 디렉토리
-        self._buffer_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-            "data", "offline_buffer"
-        )
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.join(os.environ.get('LOCALAPPDATA', os.environ.get('APPDATA', '')), "DCU_MonitoringAgent")
+        else:
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            
+        self._buffer_dir = os.path.join(base_dir, "data", "offline_buffer")
 
     # ─── 공개 메서드 ──────────────────────────────────────────────
 

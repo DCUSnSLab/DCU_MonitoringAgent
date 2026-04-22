@@ -39,10 +39,20 @@ class MonitoringAgent:
 
         # 로깅 초기화
         log_cfg = self._config.logging
+        log_file_path = log_cfg.file
+
+        if not os.path.isabs(log_file_path):
+            if getattr(sys, 'frozen', False):
+                # 빌드된 환경이면 설정 파일이 위치한 AppData 디렉토리 사용 (CWD가 System32가 되는 문제 방지)
+                base_dir = os.path.dirname(self._config_mgr.get_default_config_path())
+            else:
+                base_dir = PROJECT_ROOT
+            log_file_path = os.path.join(base_dir, log_file_path)
+
         self._logger = setup_logger(
             name="agent",
             level=log_cfg.level,
-            log_file=log_cfg.file,
+            log_file=log_file_path,
             max_size_mb=log_cfg.max_size_mb,
             backup_count=log_cfg.backup_count,
             console_output=log_cfg.console_output,
