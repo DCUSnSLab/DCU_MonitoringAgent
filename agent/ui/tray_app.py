@@ -125,6 +125,8 @@ class TrayApp:
             MenuItem("📊 현재 상태 보기", self._on_show_status),
             MenuItem("📄 로그 파일 열기", self._on_open_log),
             Menu.SEPARATOR,
+            MenuItem("🌐 서버 주소 변경", self._on_change_server),
+            Menu.SEPARATOR,
             MenuItem(
                 "🚀 시작 프로그램에 등록",
                 self._on_register_autostart,
@@ -135,6 +137,49 @@ class TrayApp:
         )
 
     # ─── 메뉴 이벤트 핸들러 ───────────────────────────────────────
+
+    def _on_change_server(self, icon, item):
+        """서버 주소 변경 팝업"""
+        import tkinter as tk
+        from tkinter import simpledialog, messagebox
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+
+        current_url = self._agent.config.server.base_url
+        new_url = simpledialog.askstring(
+            "서버 주소 변경",
+            "모니터링 서버의 기본 주소를 입력하세요\n(예: http://203.250.34.174:8000):",
+            initialvalue=current_url,
+            parent=root,
+        )
+        
+        if new_url and new_url.strip() != current_url:
+            new_url = new_url.strip()
+            if not new_url.startswith("http"):
+                new_url = "http://" + new_url
+                
+            self._agent.config.server.base_url = new_url
+            
+            # 서버 통신이 활성화되어 있지 않다면 활성화
+            if not self._agent.config.server.enabled:
+                self._agent.config.server.enabled = True
+                if self._agent._api_client:
+                    self._agent._api_client.start()
+                    
+            # 설정 저장
+            if hasattr(self._agent, 'config_mgr'):
+                self._agent.config_mgr.save()
+            
+            # 네트워크 재등록을 위해 상태 변경 강제 플래그 
+            if getattr(self._agent, '_api_client', None):
+                self._agent._api_client._registered = False
+            
+            logger.info(f"서버 주소가 변경되었습니다: {new_url}")
+            messagebox.showinfo("변경 완료", f"서버 주소가 '{new_url}'로 변경되었습니다.", parent=root)
+            
+        root.destroy()
 
     def _on_show_status(self, icon, item):
         """현재 에이전트 상태를 팝업으로 표시합니다."""

@@ -48,7 +48,7 @@ def setup_logger(
     logger.handlers.clear()
 
     # 콘솔 핸들러
-    if console_output:
+    if console_output and sys.stdout is not None:
         # Windows cp949 터미널에서 한글 출력 시 UnicodeEncodeError 방지
         try:
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")

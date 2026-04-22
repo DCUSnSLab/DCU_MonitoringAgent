@@ -38,10 +38,10 @@ monitoring:
 
 server:
   enabled: true                  # 서버 전송 활성화
-  base_url: "http://localhost:8000"
+  base_url: "http://203.250.34.174:8000"
   api_key: "dcu-secret-key-change-in-production"
   use_websocket: false
-  ws_url: "ws://localhost:8080/ws"
+  ws_url: "ws://203.250.34.174:8000/ws"
   retry_interval_seconds: 30
   offline_buffer_size: 1000
 

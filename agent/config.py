@@ -6,6 +6,7 @@ Pydantic v1 모델로 설정 값의 유효성을 검증합니다.
 """
 
 import os
+import sys
 import uuid
 import yaml
 from typing import List, Optional
@@ -13,7 +14,6 @@ from pydantic import BaseModel, Field
 
 
 # ─── 설정 모델 정의 ──────────────────────────────────────────────
-
 
 class AgentConfig(BaseModel):
     """에이전트 기본 설정"""
@@ -89,21 +89,24 @@ class AppConfig(BaseModel):
 class ConfigManager:
     """
     설정 파일을 로드하고 관리하는 클래스
-
-    Usage:
-        config_mgr = ConfigManager("config/agent_config.yaml")
-        config = config_mgr.config
-        print(config.monitoring.interval_seconds)
     """
 
-    DEFAULT_CONFIG_PATH = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "config",
-        "agent_config.yaml",
-    )
+    @staticmethod
+    def get_default_config_path() -> str:
+        if getattr(sys, 'frozen', False):
+            # PyInstaller로 패키징된 실행 파일인 경우
+            appdata = os.environ.get('LOCALAPPDATA', os.environ.get('APPDATA', ''))
+            return os.path.join(appdata, "DCU_MonitoringAgent", "agent_config.yaml")
+        else:
+            # 개발 환경
+            return os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "config",
+                "agent_config.yaml",
+            )
 
     def __init__(self, config_path: Optional[str] = None):
-        self._config_path = config_path or self.DEFAULT_CONFIG_PATH
+        self._config_path = config_path or self.get_default_config_path()
         self._config: Optional[AppConfig] = None
         self.load()
 
@@ -116,6 +119,18 @@ class ConfigManager:
 
     def load(self) -> AppConfig:
         """설정 파일을 로드합니다."""
+        # 패키징된 경우, LOCALAPPDATA에 파일이 없으면 내장된 config를 복사
+        if getattr(sys, 'frozen', False) and not os.path.exists(self._config_path):
+            builtin_config = os.path.join(sys._MEIPASS, "config", "agent_config.yaml")
+            if os.path.exists(builtin_config):
+                try:
+                    os.makedirs(os.path.dirname(self._config_path), exist_ok=True)
+                    with open(builtin_config, "r", encoding="utf-8") as f_in:
+                        with open(self._config_path, "w", encoding="utf-8") as f_out:
+                            f_out.write(f_in.read())
+                except Exception:
+                    pass
+
         if os.path.exists(self._config_path):
             with open(self._config_path, "r", encoding="utf-8") as f:
                 raw = yaml.safe_load(f) or {}
