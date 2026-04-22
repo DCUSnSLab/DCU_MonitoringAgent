@@ -118,11 +118,18 @@ class MonitoringAgent:
         self._log.info("에이전트 종료 중...")
         self._running = False
 
-        if self._api_client:
-            self._api_client.stop()
-
+        # 1. 모니터링 관련 스레드가 보고서를 보내는 작업을 완전히 끝내도록 대기
         if self._monitor_thread and self._monitor_thread.is_alive():
             self._monitor_thread.join(timeout=10)
+
+        # 2. 모든 데이터 전송이 끝난 후 오프라인 상태 알림 가장 마지막에 전송
+        if self._api_client:
+            self._api_client.stop()  # 백그라운드 재전송 버퍼 스레드 먼저 중단
+            if self._config.server.enabled:
+                try:
+                    self._api_client.send_offline_status()
+                except Exception as e:
+                    self._log.debug(f"종료 전 오프라인 알림 전송 실패: {e}")
 
         self._log.info("에이전트 종료 완료")
         return True

@@ -21,7 +21,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 이 시간(초) 동안 보고 없으면 오프라인으로 판정
-OFFLINE_THRESHOLD_SECONDS = 120
+OFFLINE_THRESHOLD_SECONDS = 60
 
 
 async def _offline_watchdog():

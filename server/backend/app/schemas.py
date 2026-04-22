@@ -78,6 +78,11 @@ class StatusReportRequest(BaseModel):
     foreground_window: Optional[str] = None
 
 
+class AgentOfflineRequest(BaseModel):
+    """에이전트 종료 시 서버에 전송하는 명시적 오프라인 보고"""
+    agent_id: str
+
+
 # ─── 서버 → 대시보드 응답 ─────────────────────────────────────────
 
 

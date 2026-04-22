@@ -94,6 +94,10 @@ class ApiClient:
         data = json.loads(report.json())
         return self._post("/api/agents/report", data)
 
+    def send_offline_status(self) -> bool:
+        """에이전트 종료 시 서버에 오프라인 상태임을 알립니다."""
+        return self._post("/api/agents/offline", {"agent_id": self._agent_id})
+
     def check_connection(self) -> bool:
         """서버 연결 가능 여부를 확인합니다."""
         try:

@@ -10,6 +10,7 @@ export default function DashboardPage() {
   const [agents, setAgents]           = useState<AgentSummary[]>([]);
   const [alerts, setAlerts]           = useState<AlertLog[]>([]);
   const [selected, setSelected]       = useState<AgentDetail | null>(null);
+  const [selectedLab, setSelectedLab] = useState<string>('전체');
   const [wsStatus, setWsStatus]       = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -101,10 +102,19 @@ export default function DashboardPage() {
   }, []);
 
   /* ── 렌더링 ── */
-  const dangerAgents  = agents.filter((a) => a.is_online && a.current_state === 'danger');
-  const warningAgents = agents.filter((a) => a.is_online && a.current_state === 'warning');
-  const safeAgents    = agents.filter((a) => a.is_online && a.current_state === 'safe');
-  const offlineAgents = agents.filter((a) => !a.is_online);
+  /* ── 데이터 필터링 (강의실 기준) ── */
+  const labs = ['전체', ...Array.from(new Set(agents.map((a) => a.lab_name || '기타'))).sort()];
+  const filteredAgents = selectedLab === '전체'
+    ? agents
+    : agents.filter((a) => (a.lab_name || '기타') === selectedLab);
+
+  const filteredAgentIds = new Set(filteredAgents.map((a) => a.agent_id));
+  const filteredAlerts = selectedLab === '전체'
+    ? alerts
+    : alerts.filter((al) => filteredAgentIds.has(al.agent_id));
+
+  const dangerAgents  = filteredAgents.filter((a) => a.is_online && a.current_state === 'danger');
+  const warningAgents = filteredAgents.filter((a) => a.is_online && a.current_state === 'warning');
 
   return (
     <div className="dashboard-layout">
@@ -119,6 +129,31 @@ export default function DashboardPage() {
           {wsStatus === 'connected' ? '실시간 연결됨' : wsStatus === 'connecting' ? '연결 중…' : '연결 끊김'}
         </div>
       </header>
+
+      {/* ── 필터 옵션 ── */}
+      <div style={{ padding: '0 2rem', marginTop: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+        <h3 style={{ margin: 0, fontSize: '1rem', color: 'var(--text-secondary)' }}>강의실 필터:</h3>
+        <select 
+          value={selectedLab} 
+          onChange={(e) => setSelectedLab(e.target.value)}
+          style={{
+            padding: '8px 16px',
+            borderRadius: '6px',
+            border: '1px solid var(--border)',
+            backgroundColor: 'var(--bg-elevated)',
+            color: 'var(--text-primary)',
+            fontSize: '15px',
+            cursor: 'pointer',
+            minWidth: '120px',
+            fontWeight: 500,
+            outline: 'none'
+          }}
+        >
+          {labs.map(lab => (
+            <option key={lab} value={lab}>{lab === '전체' ? '🌐 전체 보기' : `🏢 ${lab}호`}</option>
+          ))}
+        </select>
+      </div>
 
       {/* ── 본문 ── */}
       <main className="main-content">
@@ -179,40 +214,41 @@ export default function DashboardPage() {
           </>
         )}
 
-        {/* 정상 PC */}
-        {safeAgents.length > 0 && (
-          <>
-            <p className="section-title">🟢 정상</p>
-            <div className="agent-grid">
-              {safeAgents.map((a) => (
-                <AgentCard key={a.agent_id} agent={a} onClick={() => handleCardClick(a.agent_id)} />
-              ))}
+        {/* 강의실별 PC 목록 (그룹핑) */}
+        {Object.entries(
+          filteredAgents.reduce((acc, agent) => {
+            const lab = agent.lab_name || '기타';
+            if (!acc[lab]) acc[lab] = [];
+            acc[lab].push(agent);
+            return acc;
+          }, {} as Record<string, AgentSummary[]>)
+        ).sort().map(([labName, labAgents]) => {
+          // 해당 강의실 통계
+          const onlineCount = labAgents.filter(a => a.is_online).length;
+          return (
+            <div key={labName} style={{ marginBottom: '2rem' }}>
+              <p className="section-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>🏢 {labName}호 <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginLeft: '8px' }}>({onlineCount} / {labAgents.length} 온라인)</span></span>
+              </p>
+              <div className="agent-grid">
+                {labAgents.map((a) => (
+                  <AgentCard key={a.agent_id} agent={a} onClick={() => handleCardClick(a.agent_id)} />
+                ))}
+              </div>
             </div>
-          </>
-        )}
+          );
+        })}
 
-        {/* 오프라인 PC */}
-        {offlineAgents.length > 0 && (
-          <>
-            <p className="section-title">⚫ 오프라인</p>
-            <div className="agent-grid">
-              {offlineAgents.map((a) => (
-                <AgentCard key={a.agent_id} agent={a} onClick={() => handleCardClick(a.agent_id)} />
-              ))}
-            </div>
-          </>
-        )}
-
-        {agents.length === 0 && (
+        {filteredAgents.length === 0 && (
           <div style={{ textAlign: 'center', padding: '80px 0', color: 'var(--text-muted)' }}>
             <div style={{ fontSize: 48, marginBottom: 16 }}>📡</div>
-            <div style={{ fontSize: 16, marginBottom: 8 }}>연결된 에이전트가 없습니다</div>
+            <div style={{ fontSize: 16, marginBottom: 8 }}>{selectedLab === '전체' ? '연결된 에이전트가 없습니다' : '해당 강의실에 연결된 PC가 없습니다'}</div>
             <div style={{ fontSize: 13 }}>실습실 PC에서 에이전트를 실행하면 자동으로 표시됩니다.</div>
           </div>
         )}
 
         {/* 최근 경고 이력 */}
-        {alerts.length > 0 && (
+        {filteredAlerts.length > 0 && (
           <div className="alerts-section">
             <p className="section-title">최근 경고 이력</p>
             <table className="alert-table">
@@ -225,7 +261,7 @@ export default function DashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {alerts.slice(0, 30).map((a) => (
+                {filteredAlerts.slice(0, 30).map((a) => (
                   <tr key={a.id}
                     style={{ cursor: 'pointer' }}
                     onClick={() => handleCardClick(a.agent_id)}

@@ -23,11 +23,21 @@ async def upsert_agent(db: AsyncSession, req: AgentRegisterRequest) -> Agent:
     agent = result.scalar_one_or_none()
 
     now = datetime.now(timezone.utc)
+    
+    # 강의실 이름(lab_name) 파싱
+    import re
+    parsed_lab_name = None
+    target_name = req.hostname or req.agent_id
+    if target_name:
+        chunks = re.split(r'[-_]', target_name)
+        if len(chunks) >= 2:
+            parsed_lab_name = chunks[1]
 
     if agent is None:
         agent = Agent(
             agent_id=req.agent_id,
             hostname=req.hostname,
+            lab_name=parsed_lab_name,
             ip_address=req.ip_address,
             mac_address=req.mac_address,
             os_version=req.os_version,
@@ -36,18 +46,20 @@ async def upsert_agent(db: AsyncSession, req: AgentRegisterRequest) -> Agent:
             last_seen_at=now,
         )
         db.add(agent)
-        logger.info(f"신규 에이전트 등록: {req.agent_id} ({req.hostname})")
+        logger.info(f"신규 에이전트 등록: {req.agent_id} ({req.hostname}) - 강의실: {parsed_lab_name}")
     else:
         agent.hostname = req.hostname
+        agent.lab_name = parsed_lab_name
         agent.ip_address = req.ip_address
         agent.os_version = req.os_version
         agent.agent_version = req.agent_version
         agent.is_online = True
         agent.last_seen_at = now
-        logger.info(f"에이전트 재등록: {req.agent_id}")
+        logger.info(f"에이전트 재등록: {req.agent_id} - 강의실: {parsed_lab_name}")
 
     await db.flush()
     return agent
+
 
 
 async def save_status_report(db: AsyncSession, req: StatusReportRequest) -> StatusReportDB:
@@ -156,3 +168,23 @@ async def get_dashboard_summary(db: AsyncSession) -> DashboardSummary:
         danger_count=danger,
         recent_alert_count=recent_alerts,
     )
+
+async def check_and_mark_offline_agents(db: AsyncSession) -> list[str]:
+    """1분 이상 통신이 없는 에이전트를 오프라인으로 자동 전환합니다."""
+    threshold = datetime.now(timezone.utc) - timedelta(minutes=1)
+    
+    result = await db.execute(
+        select(Agent).where(Agent.is_online == True, Agent.last_seen_at < threshold)
+    )
+    offline_agents = result.scalars().all()
+    
+    offline_ids = []
+    for agent in offline_agents:
+        agent.is_online = False
+        offline_ids.append(agent.agent_id)
+        logger.info(f"에이전트 오프라인 전환: {agent.agent_id} (마지막 접속: {agent.last_seen_at})")
+        
+    if offline_ids:
+        await db.flush()
+        
+    return offline_ids
