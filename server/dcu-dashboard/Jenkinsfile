@@ -1,0 +1,35 @@
+def app
+
+node {
+    stage('Checkout') {
+        checkout scm
+    }
+
+    stage('Ready') {
+        sh "echo 'Ready to build Frontend(Dashboard)'"
+    }
+
+    stage('Build image') {
+        // 프론트엔드 폴더(서브 디렉토리)에서 Docker 빌드
+        dir('server/dcu-dashboard') {
+            app = docker.build("harbor.cu.ac.kr/dcuclassagent/frontend")
+        }
+    }
+
+    stage('Push image') {
+        docker.withRegistry("https://harbor.cu.ac.kr", "harbor") {
+            app.push("latest")
+            app.push("${env.BUILD_NUMBER}")
+        }
+    }
+
+    stage('Kubernetes deploy') {
+        sh "kubectl apply -f /services/dcuclassagent/k8s-manifest.yaml"
+        // 최신 프론트엔드 이미지 반영을 위해 파드 재구동
+        sh "kubectl rollout restart deployment frontend -n dcu-agent-monitor"
+    }
+
+    stage('Complete') {
+        sh "echo 'Frontend deployment completed successfully!'"
+    }
+}

@@ -1,0 +1,224 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dcu-agent-monitor
+---
+# ─── ConfigMap (환경 변수 저장) ─────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dcu-config
+  namespace: dcu-agent-monitor
+data:
+  DATABASE_URL: "postgresql+asyncpg://dcu:dcu1234@postgres-svc:5432/dcu_monitoring"
+  API_KEY: "dcu-secret-key-change-in-production"
+  # CORS 허용 출처: 프런트엔드가 실행되는 주소 (클라이언트 브라우저 도메인)
+  CORS_ORIGINS: '["http://localhost:3000","http://127.0.0.1:30030","*"]'
+  OTA_FILES_DIR: "/app/ota_files"
+  
+  # [중요] Next.js 클라이언트(브라우저)에서 백엔드에 접근하기 위한 절대 주소입니다.
+  # NodePort 방식을 사용하신다면, 사용자가 접속하는 "K8s 워커노드의 IP"와 "백엔드의 NodePort"를 적어야 합니다.
+  # 예: 워커노드 IP가 192.168.0.100이고 백엔드 NodePort가 30080인 경우
+  NEXT_PUBLIC_API_URL: "http://203.250.35.27:30080"
+  NEXT_PUBLIC_WS_URL: "ws://203.250.35.27:30080"
+---
+# ─── PVC (영구 스토리지) ────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: dcu-agent-monitor
+spec:
+  storageClassName: "openebs-hostpath"
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ota-files-pvc
+  namespace: dcu-agent-monitor
+spec:
+  storageClassName: "openebs-hostpath"
+  accessModes:
+    - ReadWriteOnce  # openebs-hostpath는 일반적으로 RWO만 지원합니다. 다중 파드는 같은 노드에 스케줄링되어야 합니다.
+  resources:
+    requests:
+      storage: 5Gi
+---
+# ─── 1. PostgreSQL (16.3 버전 적용) ─────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: dcu-agent-monitor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          # 사용자 요청 커스텀 Postgres 이미지 적용
+          image: harbor.cu.ac.kr/postgresql/postgresql-16.3-huge-pages:latest
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: "dcu"
+            - name: POSTGRES_PASSWORD
+              value: "dcu1234"
+            - name: POSTGRES_DB
+              value: "dcu_monitoring"
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-svc
+  namespace: dcu-agent-monitor
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+# ─── 2. Redis (추후 확장 대비) ──────────────────────────────────
+# 다중 백엔드 Pod 확장을 위해 WebSocket Pub/Sub용 레디스 도입 고려용
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: dcu-agent-monitor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-svc
+  namespace: dcu-agent-monitor
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+---
+# ─── 3. FastAPI 백엔드 ──────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: dcu-agent-monitor
+spec:
+  # 주의: in-memory WebSocket manager를 사용중이므로 
+  # Redis PubSub 로직을 붙이기 전까지는 1개의 레플리카 유지를 권장합니다.
+  replicas: 1 
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: harbor.cu.ac.kr/dcuclassagent/backend:latest 
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: dcu-config
+          volumeMounts:
+            - name: ota-files
+              mountPath: /app/ota_files
+      volumes:
+        - name: ota-files
+          persistentVolumeClaim:
+            claimName: ota-files-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-svc
+  namespace: dcu-agent-monitor
+spec:
+  type: NodePort
+  selector:
+    app: backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30080
+---
+# ─── 4. Next.js 프론트엔드 ──────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: dcu-agent-monitor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: harbor.cu.ac.kr/dcuclassagent/frontend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: dcu-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-svc
+  namespace: dcu-agent-monitor
+spec:
+  type: NodePort
+  selector:
+    app: frontend
+  ports:
+    - port: 3000
+      targetPort: 3000
+      nodePort: 30030
