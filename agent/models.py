@@ -6,9 +6,17 @@ Pydantic v1 모델로 직렬화/역직렬화 및 유효성 검증을 수행합�
 """
 
 from datetime import datetime
+from enum import Enum
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
+# ─── 열거형 정의 ───────────────────────────────────────────────
+
+class UserState(str, Enum):
+    """사용자의 실시간 행동 양식 정의"""
+    SAFE = "safe"           # 문제 없음 (위반 사항 없음)
+    WARNING = "warning"     # 주의 (백그라운드에서 위반 프로그램/탭 실행)
+    DANGER = "danger"       # 경고 (위반 프로그램/탭이 현재 화면에 활성화됨)
 
 # ─── 프로세스 정보 모델 ──────────────────────────────────────────
 
@@ -98,6 +106,7 @@ class StatusReport(BaseModel):
     message_type: str = "status_report"
     agent_id: str
     timestamp: datetime = Field(default_factory=datetime.now)
+    user_state: UserState = UserState.SAFE
     system_info: SystemInfo = Field(default_factory=SystemInfo)
     processes: List[ProcessInfo] = Field(default_factory=list)
     browser_details: BrowserDetails = Field(default_factory=BrowserDetails)

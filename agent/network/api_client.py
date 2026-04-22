@@ -89,7 +89,10 @@ class ApiClient:
 
     def send_report(self, report: StatusReport) -> bool:
         """상태 보고서를 서버에 전송합니다."""
-        return self._post("/api/agents/report", report.dict())
+        # pydantic v1의 .json()으로 datetime 직렬화 보장 후 dict로 재파싱
+        import json
+        data = json.loads(report.json())
+        return self._post("/api/agents/report", data)
 
     def check_connection(self) -> bool:
         """서버 연결 가능 여부를 확인합니다."""

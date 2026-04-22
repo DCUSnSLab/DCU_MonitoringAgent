@@ -90,9 +90,11 @@ class TrayApp:
 
         color_map = {
             "running": "green",
+            "safe": "green",
             "stopped": "gray",
-            "alert": "red",
             "warning": "orange",
+            "alert": "red",
+            "danger": "red",
         }
         color = color_map.get(status, "gray")
         self._icon.icon = self._create_icon_image(color)

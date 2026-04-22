@@ -49,6 +49,12 @@ def setup_logger(
 
     # 콘솔 핸들러
     if console_output:
+        # Windows cp949 터미널에서 한글 출력 시 UnicodeEncodeError 방지
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except AttributeError:
+            pass  # Python 3.6 이하 무시
+
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(getattr(logging, level.upper(), logging.INFO))
 

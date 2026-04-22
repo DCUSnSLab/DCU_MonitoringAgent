@@ -28,7 +28,9 @@ from agent.models import (
 from agent.monitors.chrome_monitor import ChromeMonitor
 from agent.monitors.process_monitor import ProcessMonitor
 from agent.monitors.window_monitor import WindowMonitor
+from agent.analyzers.state_analyzer import StateAnalyzer
 from agent.utils.logger import get_logger
+
 
 logger = get_logger("collectors.data")
 
@@ -107,6 +109,9 @@ class DataCollector:
             alerts=deduped_alerts,
             foreground_window=foreground_window,
         )
+
+        # 7-1. 사용자 상태 분류 (경고 팝업 중복 방지를 위해 deduped 되기 전의 '전체' 알림 기준)
+        report.user_state = StateAnalyzer.evaluate(report, all_alerts)
 
         # 8. 큐에 추가 (오버플로우 시 가장 오래된 항목 제거)
         self._enqueue_report(report)
@@ -195,12 +200,15 @@ class DataCollector:
     def _log_summary(self, report: StatusReport):
         """수집 결과를 요약하여 로그로 출력합니다."""
         chrome = report.browser_details.chrome
-        logger.info(
-            f"[수집] 프로세스:{len(report.processes)}개 | "
-            f"크롬탭:{chrome.tab_count}개({'CDP' if chrome.debug_mode else '비CDP'}) | "
-            f"알림:{len(report.alerts)}개 | "
-            f"활성창:{report.foreground_window or 'N/A'}"
-        )
+        state_name = report.user_state.name if report.user_state else "UNKNOWN"
+        try:
+            logger.info(
+                f"[state:{state_name}] proc:{len(report.processes)} | "
+                f"tabs:{chrome.tab_count} | alerts:{len(report.alerts)} | "
+                f"fg:{report.foreground_window or 'N/A'}"
+            )
+        except UnicodeEncodeError:
+            logger.info(f"[state:{state_name}] proc:{len(report.processes)} tabs:{chrome.tab_count} alerts:{len(report.alerts)}")
         for alert in report.alerts:
             logger.warning(f"  [{alert.level.upper()}] {alert.message}")
 

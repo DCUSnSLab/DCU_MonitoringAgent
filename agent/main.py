@@ -153,6 +153,10 @@ class MonitoringAgent:
             return
         report = self._data_collector.collect()
 
+        # UI가 연결된 경우 상태 업데이트
+        if hasattr(self, "tray_app") and self.tray_app:
+            self.tray_app.update_status(report.user_state.value)
+
         # 서버 전송 (활성화 시)
         if self._api_client and self._config.server.enabled:
             if not self._api_client.send_report(report):
@@ -169,6 +173,8 @@ def run_tray_mode(agent: "MonitoringAgent"):
     agent.start()
 
     tray = TrayApp(agent=agent, on_stop_callback=lambda: sys.exit(0))
+    agent.tray_app = tray
+
     # TrayApp.run()은 메인 스레드를 블로킹 → 종료 시까지 대기
     tray.run()
 

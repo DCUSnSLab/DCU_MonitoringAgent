@@ -37,9 +37,9 @@ monitoring:
       - "gemini.google.com"
 
 server:
-  enabled: false                 # 서버 전송 활성화 여부
-  base_url: "http://localhost:8080"
-  api_key: ""
+  enabled: true                  # 서버 전송 활성화
+  base_url: "http://localhost:8000"
+  api_key: "dcu-secret-key-change-in-production"
   use_websocket: false
   ws_url: "ws://localhost:8080/ws"
   retry_interval_seconds: 30
