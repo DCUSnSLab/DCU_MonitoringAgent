@@ -64,3 +64,30 @@ offline_buffer/
 
 # User-specific config overrides (optional)
 agent_config.local.yaml
+
+# ===== Server Side (Node.js & Next.js) =====
+node_modules/
+.pnp
+.pnp.js
+.npm
+.yarn/install-state.gz
+
+# Next.js build output
+server/dcu-dashboard/.next/
+server/dcu-dashboard/out/
+server/dcu-dashboard/build/
+
+# Next.js / Node env files
+server/dcu-dashboard/.env*.local
+
+# ===== Server Side (Backend / DB) =====
+# SQLite Databases
+*.db
+*.sqlite
+*.sqlite3
+dcu_monitoring.db
+
+# Docker
+docker-compose.override.yml
+.docker-volumes/
+postgres-data/
