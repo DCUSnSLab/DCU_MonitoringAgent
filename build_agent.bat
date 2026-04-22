@@ -7,7 +7,7 @@ echo ========================================================
 
 REM --- Config ---
 set "CONFIG_FILE=config\agent_config.yaml"
-set "SERVER_URL=http://203.250.34.174:8000"
+set "SERVER_URL=http://203.250.35.27:30085"
 set "API_KEY=dcu-secret-key-change-in-production"
 set "SKIP_UPLOAD=0"
 

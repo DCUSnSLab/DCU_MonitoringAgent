@@ -4,7 +4,7 @@
 agent:
   id: ""                        # auto-generate
   lab_name: "lab1"
-  version: "1.0.13"
+  version: "1.0.17"
 
 monitoring:
   interval_seconds: 1
@@ -36,10 +36,10 @@ monitoring:
 
 server:
   enabled: true
-  base_url: "http://203.250.34.174:8000"
+  base_url: "http://203.250.35.27:30085"
   api_key: "dcu-secret-key-change-in-production"
   use_websocket: false
-  ws_url: "ws://203.250.34.174:8000/ws"
+  ws_url: "ws://203.250.35.27:30085/ws"
   retry_interval_seconds: 30
   offline_buffer_size: 1000
 
