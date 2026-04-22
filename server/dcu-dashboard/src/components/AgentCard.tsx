@@ -34,6 +34,7 @@ export default function AgentCard({ agent, onClick }: Props) {
           <div className="agent-ip mono">
             {agent.ip_address ?? '—'}
             {agent.lab_name && <span style={{ marginLeft: 6, color: 'var(--text-muted)' }}>• {agent.lab_name}</span>}
+            {agent.agent_version && <span style={{ marginLeft: 6, fontSize: '0.85em', color: 'var(--primary)', opacity: 0.8 }}>v{agent.agent_version}</span>}
           </div>
         </div>
         <StatusBadge state={state} size="sm" />

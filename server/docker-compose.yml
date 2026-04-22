@@ -30,6 +30,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://dcu:dcu1234@db:5432/dcu_monitoring
       API_KEY: dcu-secret-key-change-in-production
       CORS_ORIGINS: '["http://localhost:3000","http://frontend:3000"]'
+      OTA_FILES_DIR: /app/ota_files
     ports:
       - "8000:8000"
     depends_on:
@@ -37,6 +38,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend/app:/app/app   # 개발 시 hot-reload
+      - ota_files:/app/ota_files  # OTA 업데이트 파일 영속 저장
     command: >
       uvicorn app.main:app
       --host 0.0.0.0
@@ -60,3 +62,4 @@ services:
 
 volumes:
   postgres_data:
+  ota_files:

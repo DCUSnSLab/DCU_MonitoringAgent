@@ -97,14 +97,18 @@ async def save_status_report(db: AsyncSession, req: StatusReportRequest) -> Stat
         db.add(alert_log)
 
     # 에이전트 현재 상태 캐시 업데이트
+    update_values = {
+        "current_state": req.user_state,
+        "last_seen_at": now,
+        "is_online": True,
+    }
+    if req.agent_version:
+        update_values["agent_version"] = req.agent_version
+
     await db.execute(
         update(Agent)
         .where(Agent.agent_id == req.agent_id)
-        .values(
-            current_state=req.user_state,
-            last_seen_at=now,
-            is_online=True,
-        )
+        .values(**update_values)
     )
 
     return report
@@ -140,6 +144,7 @@ async def get_agent_summary(db: AsyncSession, agent_id: str) -> Optional[AgentSu
         foreground_window=last_report.foreground_window if last_report else None,
         cpu_percent=last_report.cpu_percent if last_report else 0.0,
         memory_percent=last_report.memory_percent if last_report else 0.0,
+        agent_version=agent.agent_version,
     )
 
 

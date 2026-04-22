@@ -14,6 +14,7 @@
 
 import json
 import os
+import sys
 import threading
 import time
 from datetime import datetime
@@ -53,6 +54,9 @@ class ApiClient:
         self._send_thread: Optional[threading.Thread] = None
         self._registered = False
 
+        # OTA 업데이트 콜백 (MonitoringAgent에서 설정)
+        self._on_update_available = None
+
         # 오프라인 버퍼 디렉토리
         if getattr(sys, 'frozen', False):
             base_dir = os.path.join(os.environ.get('LOCALAPPDATA', os.environ.get('APPDATA', '')), "DCU_MonitoringAgent")
@@ -90,11 +94,25 @@ class ApiClient:
         return self._post("/api/agents/register", registration.dict())
 
     def send_report(self, report: StatusReport) -> bool:
-        """상태 보고서를 서버에 전송합니다."""
-        # pydantic v1의 .json()으로 datetime 직렬화 보장 후 dict로 재파싱
+        """상태 보고서를 서버에 전송합니다. 응답의 OTA 정보도 처리합니다."""
         import json
         data = json.loads(report.json())
-        return self._post("/api/agents/report", data)
+
+        success, resp_data = self._post_with_response("/api/agents/report", data)
+
+        # OTA 업데이트 응답 처리
+        if success and resp_data and resp_data.get("update_available"):
+            latest_version = resp_data.get("latest_version", "")
+            latest_checksum = resp_data.get("latest_checksum", "")
+            logger.info(f"서버로부터 OTA 업데이트 감지: v{latest_version}")
+            if self._on_update_available:
+                self._on_update_available(latest_version, latest_checksum)
+
+        return success
+
+    def set_update_callback(self, callback):
+        """OTA 업데이트 감지 시 호출될 콜백을 설정합니다."""
+        self._on_update_available = callback
 
     def send_offline_status(self) -> bool:
         """에이전트 종료 시 서버에 오프라인 상태임을 알립니다."""
@@ -213,22 +231,35 @@ class ApiClient:
         Returns:
             True: 전송 성공, False: 실패
         """
+        success, _ = self._post_with_response(endpoint, data)
+        return success
+
+    def _post_with_response(self, endpoint: str, data: dict) -> tuple:
+        """
+        JSON 데이터를 POST 요청으로 전송하고, 응답 JSON도 함께 반환합니다.
+
+        Returns:
+            (success: bool, response_data: dict or None)
+        """
         url = f"{self._config.base_url}{endpoint}"
         try:
             resp = self._session.post(url, json=data, timeout=5)
             if resp.status_code in (200, 201):
                 logger.debug(f"POST 성공: {endpoint} ({resp.status_code})")
-                return True
+                try:
+                    return True, resp.json()
+                except Exception:
+                    return True, None
             else:
                 logger.warning(f"POST 실패: {endpoint} → HTTP {resp.status_code}")
-                return False
+                return False, None
         except requests.ConnectionError:
             logger.debug(f"서버 연결 불가: {url}")
             self._registered = False
-            return False
+            return False, None
         except requests.Timeout:
             logger.warning(f"서버 응답 타임아웃: {url}")
-            return False
+            return False, None
         except Exception as e:
             logger.error(f"POST 오류 ({endpoint}): {e}")
-            return False
+            return False, None

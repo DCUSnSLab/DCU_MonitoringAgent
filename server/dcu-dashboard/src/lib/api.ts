@@ -16,6 +16,7 @@ export interface AgentSummary {
   foreground_window: string | null;
   cpu_percent: number;
   memory_percent: number;
+  agent_version?: string | null;
 }
 
 export interface ProcessInfo {

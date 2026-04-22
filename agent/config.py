@@ -19,7 +19,7 @@ class AgentConfig(BaseModel):
     """에이전트 기본 설정"""
     id: str = ""
     lab_name: str = "실습실"
-    version: str = "1.0.0"
+    version: str = "1.0.10"
 
 
 class ProcessConfig(BaseModel):
@@ -138,6 +138,19 @@ class ConfigManager:
         else:
             # 설정 파일이 없으면 기본값 사용
             self._config = AppConfig()
+
+        # frozen 환경: 번들된 config의 version을 항상 사용 (AppData 파일에 이전 버전이 남아있는 경우 대비)
+        if getattr(sys, 'frozen', False):
+            builtin_config = os.path.join(sys._MEIPASS, "config", "agent_config.yaml")
+            if os.path.exists(builtin_config):
+                try:
+                    with open(builtin_config, "r", encoding="utf-8") as f:
+                        builtin_raw = yaml.safe_load(f) or {}
+                    builtin_version = builtin_raw.get("agent", {}).get("version", "")
+                    if builtin_version:
+                        self._config.agent.version = builtin_version
+                except Exception:
+                    pass
 
         # 에이전트 ID가 비어있으면 자동 생성
         if not self._config.agent.id:

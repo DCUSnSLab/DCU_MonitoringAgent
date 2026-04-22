@@ -103,6 +103,7 @@ class DataCollector:
         report = StatusReport(
             agent_id=self._agent_id,
             timestamp=timestamp,
+            agent_version=self._config.agent.version,
             system_info=system_info,
             processes=processes,
             browser_details=BrowserDetails(chrome=chrome_info),

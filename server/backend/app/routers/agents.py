@@ -10,6 +10,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Header
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -84,7 +85,30 @@ async def receive_report(
     await ws_manager.broadcast("summary_update", dashboard_summary.model_dump())
 
     logger.debug(f"보고 수신: {req.agent_id} → {req.user_state} (알림 {len(req.alerts)}개)")
-    return {"status": "ok", "report_id": report.id}
+
+    # OTA 업데이트 확인: 에이전트 버전과 서버 최신 버전 비교
+    update_available = False
+    latest_version = ""
+    latest_checksum = ""
+    if req.agent_version:
+        from sqlalchemy import desc as sql_desc
+        from app.models import OTARelease
+        ota_result = await db.execute(
+            select(OTARelease).order_by(sql_desc(OTARelease.uploaded_at)).limit(1)
+        )
+        latest_release = ota_result.scalar_one_or_none()
+        if latest_release and latest_release.version != req.agent_version:
+            update_available = True
+            latest_version = latest_release.version
+            latest_checksum = latest_release.checksum
+
+    return {
+        "status": "ok",
+        "report_id": report.id,
+        "update_available": update_available,
+        "latest_version": latest_version,
+        "latest_checksum": latest_checksum,
+    }
 
 
 @router.post("/api/agents/offline")

@@ -106,6 +106,7 @@ class StatusReport(BaseModel):
     message_type: str = "status_report"
     agent_id: str
     timestamp: datetime = Field(default_factory=datetime.now)
+    agent_version: str = ""
     user_state: UserState = UserState.SAFE
     system_info: SystemInfo = Field(default_factory=SystemInfo)
     processes: List[ProcessInfo] = Field(default_factory=list)

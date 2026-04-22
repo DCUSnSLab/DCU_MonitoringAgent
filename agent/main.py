@@ -24,6 +24,19 @@ from agent.utils.logger import setup_logger, get_logger
 from agent.collectors.data_collector import DataCollector
 from agent.network.api_client import ApiClient
 
+try:
+    from agent.network.updater import OTAUpdater
+    HAS_OTA = True
+except Exception as _ota_err:
+    import traceback
+    _ota_log_dir = os.path.join(os.environ.get('LOCALAPPDATA', '.'), 'DCU_MonitoringAgent')
+    os.makedirs(_ota_log_dir, exist_ok=True)
+    with open(os.path.join(_ota_log_dir, 'ota_import_error.log'), 'w') as _f:
+        _f.write(f"OTA import error: {_ota_err}\n")
+        traceback.print_exc(file=_f)
+    OTAUpdater = None
+    HAS_OTA = False
+
 
 class MonitoringAgent:
     """
@@ -43,8 +56,9 @@ class MonitoringAgent:
 
         if not os.path.isabs(log_file_path):
             if getattr(sys, 'frozen', False):
-                # 빌드된 환경이면 설정 파일이 위치한 AppData 디렉토리 사용 (CWD가 System32가 되는 문제 방지)
-                base_dir = os.path.dirname(self._config_mgr.get_default_config_path())
+                # 빌드된 환경: LOCALAPPDATA/DCU_MonitoringAgent 사용
+                appdata = os.environ.get('LOCALAPPDATA', os.environ.get('APPDATA', ''))
+                base_dir = os.path.join(appdata, "DCU_MonitoringAgent")
             else:
                 base_dir = PROJECT_ROOT
             log_file_path = os.path.join(base_dir, log_file_path)
@@ -66,6 +80,7 @@ class MonitoringAgent:
         # 모니터 인스턴스
         self._data_collector: DataCollector = None
         self._api_client: ApiClient = None
+        self._updater: OTAUpdater = None
 
     @property
     def config(self):
@@ -91,6 +106,10 @@ class MonitoringAgent:
         self._running = True
         self._data_collector = DataCollector(self._config)
 
+        # 이전 버전 파일 정리 (OTA 업데이트 후 남은 .old 파일)
+        if HAS_OTA:
+            OTAUpdater.cleanup_old_version()
+
         # 에이전트 등록 정보 로그
         reg = self._data_collector.get_registration_info()
         self._log.info(f"  호스트명     : {reg.hostname}")
@@ -99,6 +118,20 @@ class MonitoringAgent:
         # API 클라이언트 시작 (서버 활성화 시)
         if self._config.server.enabled:
             self._api_client = ApiClient(self._config.server, self._config.agent.id)
+
+            # OTA Updater 초기화 및 콜백 연결
+            if HAS_OTA:
+                self._updater = OTAUpdater(
+                    server_base_url=self._config.server.base_url,
+                    api_key=self._config.server.api_key,
+                    current_version=self._config.agent.version,
+                )
+                self._api_client.set_update_callback(
+                    lambda ver, chk: self._updater.check_and_update(ver, chk)
+                )
+            else:
+                self._log.warning("OTA Updater module not available - auto-update disabled")
+
             self._api_client.start()
         else:
             self._log.info("  서버 전송   : 비활성 (로컬 모드)")

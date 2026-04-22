@@ -70,6 +70,7 @@ class AgentRegisterRequest(BaseModel):
 class StatusReportRequest(BaseModel):
     agent_id: str
     timestamp: Optional[datetime] = None
+    agent_version: str = ""
     user_state: str = "safe"
     system_info: SystemInfoSchema = SystemInfoSchema()
     processes: list[ProcessInfoSchema] = []
@@ -101,6 +102,7 @@ class AgentSummary(BaseModel):
     foreground_window: Optional[str] = None
     cpu_percent: float = 0.0
     memory_percent: float = 0.0
+    agent_version: Optional[str] = None
 
     class Config:
         from_attributes = True

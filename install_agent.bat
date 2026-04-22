@@ -1,6 +1,6 @@
 @echo off
+cd /d "%~dp0"
 echo Installing DCU Monitoring Agent...
-
 set "TARGET_DIR=%LOCALAPPDATA%\DCU_MonitoringAgent"
 if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
 

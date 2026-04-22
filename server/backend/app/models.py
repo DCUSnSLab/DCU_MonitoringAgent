@@ -100,3 +100,18 @@ class AlertLogDB(Base):
 
     # 관계
     report: Mapped["StatusReportDB"] = relationship("StatusReportDB", back_populates="alerts")
+
+
+class OTARelease(Base):
+    """OTA 업데이트 릴리즈 정보"""
+    __tablename__ = "ota_releases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    version: Mapped[str] = mapped_column(String(32), unique=True, nullable=False, index=True)
+    filename: Mapped[str] = mapped_column(String(256), nullable=False)
+    checksum: Mapped[str] = mapped_column(String(128), nullable=False)  # sha256
+    file_size: Mapped[int] = mapped_column(Integer, default=0)
+    release_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
