@@ -12,7 +12,7 @@ node {
     stage('Build image') {
         // 프론트엔드 폴더(서브 디렉토리)에서 Docker 빌드
         dir('server/dcu-dashboard') {
-            app = docker.build("harbor.cu.ac.kr/dcuclassagent/frontend")
+            app = docker.build("harbor.cu.ac.kr/dcuclassagent/frontend", "--build-arg NEXT_PUBLIC_API_URL=http://203.250.35.27:30085 --build-arg NEXT_PUBLIC_WS_URL=ws://203.250.35.27:30085 .")
         }
     }
 
