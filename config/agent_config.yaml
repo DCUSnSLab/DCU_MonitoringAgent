@@ -1,0 +1,58 @@
+# DCU Monitoring Agent Configuration
+# ===================================
+
+agent:
+  id: ""                        # 자동 생성 (빈 값이면 MAC 주소 기반 생성)
+  lab_name: "실습실1"            # 실습실 이름
+  version: "1.0.0"
+
+monitoring:
+  interval_seconds: 1           # 모니터링 주기 (초)
+  track_foreground: true         # 포그라운드 윈도우 추적
+
+  process:
+    mode: "all"                  # all | whitelist | blacklist
+    whitelist:                   # mode가 whitelist일 때 허용 프로세스
+      - "chrome.exe"
+      - "code.exe"
+      - "devenv.exe"
+      - "notepad.exe"
+      - "explorer.exe"
+    blacklist:                   # mode가 blacklist일 때 경고 프로세스
+      - "kakaotalk.exe"
+      - "telegram.exe"
+      - "discord.exe"
+      - "slack.exe"
+
+  chrome:
+    enabled: true
+    debug_port: 9222             # CDP 디버깅 포트
+    poll_interval_seconds: 5     # 크롬 탭 폴링 주기
+    user_data_dir: "C:\\chrome-debug"  # CDP 독립 프로필 (기존 크롬과 충돌 방지)
+    blocked_urls:                # 차단 URL 패턴 (부분 일치)
+      - "chat.openai.com"
+      - "chatgpt.com"
+      - "bard.google.com"
+      - "claude.ai"
+      - "gemini.google.com"
+
+server:
+  enabled: false                 # 서버 전송 활성화 여부
+  base_url: "http://localhost:8080"
+  api_key: ""
+  use_websocket: false
+  ws_url: "ws://localhost:8080/ws"
+  retry_interval_seconds: 30
+  offline_buffer_size: 1000
+
+security:
+  prevent_exit: true             # 종료 방지
+  exit_password: "admin1234"     # 종료 시 필요한 비밀번호
+  hide_from_taskbar: false       # 작업 표시줄에서 숨기기
+
+logging:
+  level: "INFO"                  # DEBUG | INFO | WARNING | ERROR
+  file: "logs/agent.log"
+  max_size_mb: 10
+  backup_count: 5
+  console_output: true           # 콘솔 출력 여부
