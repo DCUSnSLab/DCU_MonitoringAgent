@@ -139,17 +139,46 @@ class ConfigManager:
             # 설정 파일이 없으면 기본값 사용
             self._config = AppConfig()
 
-        # frozen 환경: 번들된 config의 version을 항상 사용 (AppData 파일에 이전 버전이 남아있는 경우 대비)
+        # frozen 환경: 번들된 config의 주요 정보(버전, 서버주소)를 덮어씀
         if getattr(sys, 'frozen', False):
             builtin_config = os.path.join(sys._MEIPASS, "config", "agent_config.yaml")
             if os.path.exists(builtin_config):
                 try:
                     with open(builtin_config, "r", encoding="utf-8") as f:
                         builtin_raw = yaml.safe_load(f) or {}
+                    
+                    need_save = False
+                    
+                    # 1. 버전 갱신
                     builtin_version = builtin_raw.get("agent", {}).get("version", "")
-                    if builtin_version:
+                    if builtin_version and self._config.agent.version != builtin_version:
                         self._config.agent.version = builtin_version
-                except Exception:
+                        need_save = True
+
+                    # 2. 서버 통신 주소 갱신
+                    server_raw = builtin_raw.get("server", {})
+                    builtin_base_url = server_raw.get("base_url", "")
+                    builtin_ws_url = server_raw.get("ws_url", "")
+                    
+                    if builtin_base_url and self._config.server.base_url != builtin_base_url:
+                        self._config.server.base_url = builtin_base_url
+                        need_save = True
+                        
+                    if builtin_ws_url and self._config.server.ws_url != builtin_ws_url:
+                        self._config.server.ws_url = builtin_ws_url
+                        need_save = True
+                        
+                    # 덮어쓴 최신 설정을 로컬 %APPDATA% 파일에도 바로 반영 (업데이트 동기화)
+                    if need_save and getattr(self, "_config_path", None):
+                        # agent_id 생성 전에 save()를 호출하면 id가 빈 값으로 저장될 수 있으므로
+                        # 이후 하단에서 id 생성 검사 후에 save()를 진행하도록 플래그만 설정해도 되지만, 
+                        # 하단 로직을 수정하지 않기 위해 여기서 바로 id를 생성해줍니다.
+                        if not self._config.agent.id:
+                            self._config.agent.id = self._generate_agent_id()
+                        self.save()
+                        
+                except Exception as e:
+                    print(f"[Config] Error syncing config from update: {e}")
                     pass
 
         # 에이전트 ID가 비어있으면 자동 생성
