@@ -28,8 +28,8 @@ export default function AgentModal({ agent, onClose }: Props) {
             {[
               ['IP 주소', agent.ip_address ?? '—'],
               ['실습실', agent.lab_name ?? '—'],
-              ['OS', agent.ip_address ?? '—'],
-              ['에이전트 버전', '—'],
+              ['OS', agent.os_version ?? '—'],
+              ['에이전트 버전', agent.agent_version ?? '—'],
               ['CPU', `${agent.cpu_percent.toFixed(1)}%`],
               ['메모리', `${agent.memory_percent.toFixed(1)}%`],
             ].map(([label, value]) => (

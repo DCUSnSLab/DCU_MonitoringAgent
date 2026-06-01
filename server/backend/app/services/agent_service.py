@@ -46,7 +46,7 @@ async def upsert_agent(db: AsyncSession, req: AgentRegisterRequest) -> Agent:
             last_seen_at=now,
         )
         db.add(agent)
-        logger.info(f"신규 에이전트 등록: {req.agent_id} ({req.hostname}) - 강의실: {parsed_lab_name}")
+        logger.info(f"신규 에이전트 등록: {req.agent_id} ({req.hostname}) | IP: {req.ip_address} - 강의실: {parsed_lab_name}")
     else:
         agent.hostname = req.hostname
         agent.lab_name = parsed_lab_name
@@ -55,7 +55,7 @@ async def upsert_agent(db: AsyncSession, req: AgentRegisterRequest) -> Agent:
         agent.agent_version = req.agent_version
         agent.is_online = True
         agent.last_seen_at = now
-        logger.info(f"에이전트 재등록: {req.agent_id} - 강의실: {parsed_lab_name}")
+        logger.info(f"에이전트 재등록: {req.agent_id} | IP: {req.ip_address} - 강의실: {parsed_lab_name}")
 
     await db.flush()
     return agent
@@ -145,6 +145,7 @@ async def get_agent_summary(db: AsyncSession, agent_id: str) -> Optional[AgentSu
         cpu_percent=last_report.cpu_percent if last_report else 0.0,
         memory_percent=last_report.memory_percent if last_report else 0.0,
         agent_version=agent.agent_version,
+        os_version=agent.os_version,
     )
 
 

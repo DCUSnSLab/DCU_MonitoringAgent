@@ -103,6 +103,7 @@ class AgentSummary(BaseModel):
     cpu_percent: float = 0.0
     memory_percent: float = 0.0
     agent_version: Optional[str] = None
+    os_version: Optional[str] = None
 
     class Config:
         from_attributes = True
