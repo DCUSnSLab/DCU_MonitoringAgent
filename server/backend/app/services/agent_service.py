@@ -48,14 +48,20 @@ async def upsert_agent(db: AsyncSession, req: AgentRegisterRequest) -> Agent:
         db.add(agent)
         logger.info(f"신규 에이전트 등록: {req.agent_id} ({req.hostname}) | IP: {req.ip_address} - 강의실: {parsed_lab_name}")
     else:
-        agent.hostname = req.hostname
-        agent.lab_name = parsed_lab_name
-        agent.ip_address = req.ip_address
-        agent.os_version = req.os_version
-        agent.agent_version = req.agent_version
+        # 빈 값으로 기존 정보를 덮어쓰지 않는다 (보고 기반 자동 등록 시 일부 필드가 비어 올 수 있음)
+        if req.hostname:
+            agent.hostname = req.hostname
+        if parsed_lab_name:
+            agent.lab_name = parsed_lab_name
+        if req.ip_address:
+            agent.ip_address = req.ip_address
+        if req.os_version:
+            agent.os_version = req.os_version
+        if req.agent_version:
+            agent.agent_version = req.agent_version
         agent.is_online = True
         agent.last_seen_at = now
-        logger.info(f"에이전트 재등록: {req.agent_id} | IP: {req.ip_address} - 강의실: {parsed_lab_name}")
+        logger.info(f"에이전트 재등록: {req.agent_id} | IP: {agent.ip_address} - 강의실: {agent.lab_name}")
 
     await db.flush()
     return agent
@@ -104,12 +110,19 @@ async def save_status_report(db: AsyncSession, req: StatusReportRequest) -> Stat
     }
     if req.agent_version:
         update_values["agent_version"] = req.agent_version
+    # 보고서에 담겨 온 IP/호스트명을 에이전트 레코드에 반영 (빈 값은 무시)
+    if req.ip_address:
+        update_values["ip_address"] = req.ip_address
+    if req.hostname:
+        update_values["hostname"] = req.hostname
 
     await db.execute(
         update(Agent)
         .where(Agent.agent_id == req.agent_id)
         .values(**update_values)
     )
+
+    logger.info(f"상태 보고: {req.agent_id} | IP: {req.ip_address or 'N/A'} | 상태: {req.user_state}")
 
     return report
 

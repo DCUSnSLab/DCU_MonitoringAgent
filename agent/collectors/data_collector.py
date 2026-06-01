@@ -48,6 +48,11 @@ class DataCollector:
         self._config = config
         self._agent_id = config.agent.id
 
+        # 호스트명/IP는 자주 바뀌지 않으므로 1회만 조회해 캐시한다.
+        # (collect()는 1초마다 호출되므로 매 사이클 소켓 연결을 피한다)
+        self._hostname = socket.gethostname()
+        self._ip_address = self._get_local_ip()
+
         # 모니터 초기화
         self._process_monitor = ProcessMonitor(config.monitoring.process)
         self._window_monitor = WindowMonitor()
@@ -102,6 +107,8 @@ class DataCollector:
         # 7. StatusReport 생성
         report = StatusReport(
             agent_id=self._agent_id,
+            hostname=self._hostname,
+            ip_address=self._ip_address,
             timestamp=timestamp,
             agent_version=self._config.agent.version,
             system_info=system_info,
@@ -126,8 +133,8 @@ class DataCollector:
         """에이전트 등록 정보를 반환합니다."""
         return AgentRegistration(
             agent_id=self._agent_id,
-            hostname=socket.gethostname(),
-            ip_address=self._get_local_ip(),
+            hostname=self._hostname,
+            ip_address=self._ip_address,
             mac_address=self._get_mac_address(),
             os_version=platform.platform(),
             agent_version=self._config.agent.version,

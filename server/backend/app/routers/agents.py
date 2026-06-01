@@ -58,13 +58,15 @@ async def receive_report(
     _: None = Depends(verify_api_key),
 ):
     """에이전트 상태 보고서 수신 및 저장"""
-    # 미등록 에이전트 자동 등록
+    # 미등록 에이전트 자동 등록 (보고서에 담겨 온 IP/호스트명 활용)
     from app.schemas import AgentRegisterRequest as Reg
     await agent_service.upsert_agent(
         db,
         Reg(
             agent_id=req.agent_id,
-            hostname=req.agent_id,  # fallback
+            hostname=req.hostname or req.agent_id,  # fallback
+            ip_address=req.ip_address,
+            agent_version=req.agent_version,
         ),
     )
 

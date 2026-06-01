@@ -72,10 +72,18 @@ class TrayApp:
         self._icon = pystray.Icon(
             name=AUTOSTART_APP_NAME,
             icon=icon_image,
-            title="DCU 모니터링 에이전트",
+            title=self._make_title(),
             menu=menu,
         )
         self._icon.run()
+
+    def _make_title(self, status: Optional[str] = None) -> str:
+        """트레이 hover 시 표시될 제목을 만듭니다 (버전 포함)."""
+        version = self._agent.config.agent.version
+        title = f"DCU 모니터링 에이전트 v{version}"
+        if status:
+            title += f" [{status}]"
+        return title
 
     def update_status(self, status: str):
         """
@@ -98,7 +106,7 @@ class TrayApp:
         }
         color = color_map.get(status, "gray")
         self._icon.icon = self._create_icon_image(color)
-        self._icon.title = f"DCU 모니터링 에이전트 [{status}]"
+        self._icon.title = self._make_title(status)
 
     def show_notification(self, title: str, message: str):
         """Windows 토스트 알림을 표시합니다."""

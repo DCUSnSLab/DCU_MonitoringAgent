@@ -14,6 +14,7 @@ rename 전략을 사용합니다:
 """
 
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -28,6 +29,9 @@ logger = get_logger("network.updater")
 
 class OTAUpdater:
     """OTA 자동 업데이트 관리자"""
+
+    # 같은 대상 버전으로 이만큼 교체·재시작했는데도 버전이 그대로면 업데이트를 포기한다.
+    MAX_UPDATE_ATTEMPTS = 3
 
     def __init__(self, server_base_url: str, api_key: str, current_version: str):
         self._base_url = server_base_url
@@ -72,9 +76,28 @@ class OTAUpdater:
             return False
 
         if latest_version == self._current_version:
+            # 이미 최신 버전 → 직전 업데이트가 성공했거나 더 받을 게 없음. 시도 기록 정리.
+            self._clear_update_state()
             return False
 
-        logger.info(f"OTA 업데이트 감지: {self._current_version} → {latest_version}")
+        # 무한 루프 방지 가드:
+        # 같은 대상 버전으로 이미 여러 번 교체·재시작했는데도 현재 버전이 그대로라면
+        # 서버에 등록된 버전과 실제 exe 내부 버전이 불일치하는 상황이므로,
+        # 더 시도해봐야 똑같이 반복될 뿐이다. 일정 횟수 이후로는 포기한다.
+        attempts = self._get_attempt_count(latest_version)
+        if attempts >= self.MAX_UPDATE_ATTEMPTS:
+            logger.error(
+                f"OTA 업데이트 중단: v{latest_version}(으)로 {attempts}회 교체했으나 "
+                f"여전히 v{self._current_version}입니다. 서버에 등록된 버전과 실제 "
+                f"빌드 내부 버전이 불일치할 수 있습니다. 무한 루프를 막기 위해 이 "
+                f"버전에 대한 업데이트를 건너뜁니다."
+            )
+            return False
+
+        logger.info(
+            f"OTA 업데이트 감지: {self._current_version} → {latest_version} "
+            f"(시도 {attempts + 1}/{self.MAX_UPDATE_ATTEMPTS})"
+        )
         self._updating = True
 
         try:
@@ -88,7 +111,11 @@ class OTAUpdater:
                 self._cleanup(update_path)
                 return False
 
-            # 3. exe swap & 재시작
+            # 3. 교체 직전에 시도 횟수를 기록한다.
+            #    (다운로드/검증 실패는 정상 재시도이므로 카운트하지 않는다)
+            self._record_attempt(latest_version)
+
+            # 4. exe swap & 재시작
             self._swap_and_restart(update_path)
             return True  # 여기에 도달하면 안 됨 (재시작됨)
 
@@ -96,6 +123,52 @@ class OTAUpdater:
             logger.error(f"OTA 업데이트 실패: {e}")
             self._updating = False
             return False
+
+    # ─── 무한 루프 방지용 시도 상태 관리 ─────────────────────────────
+
+    def _state_path(self) -> str:
+        """OTA 시도 상태를 저장할 파일 경로 (%LOCALAPPDATA%\\DCU_MonitoringAgent)."""
+        base = os.path.join(
+            os.environ.get("LOCALAPPDATA", os.environ.get("APPDATA", "")),
+            "DCU_MonitoringAgent",
+        )
+        return os.path.join(base, "ota_state.json")
+
+    def _read_state(self) -> dict:
+        try:
+            with open(self._state_path(), "r", encoding="utf-8") as f:
+                return json.load(f) or {}
+        except Exception:
+            return {}
+
+    def _get_attempt_count(self, target_version: str) -> int:
+        """해당 대상 버전에 대해 지금까지 교체·재시작한 횟수를 반환합니다."""
+        state = self._read_state()
+        if state.get("target_version") == target_version:
+            try:
+                return int(state.get("attempts", 0))
+            except (TypeError, ValueError):
+                return 0
+        # 대상 버전이 바뀌면 카운트를 새로 시작한다.
+        return 0
+
+    def _record_attempt(self, target_version: str):
+        """해당 대상 버전에 대한 교체 시도 횟수를 1 증가시켜 저장합니다."""
+        attempts = self._get_attempt_count(target_version) + 1
+        try:
+            os.makedirs(os.path.dirname(self._state_path()), exist_ok=True)
+            with open(self._state_path(), "w", encoding="utf-8") as f:
+                json.dump({"target_version": target_version, "attempts": attempts}, f)
+        except Exception as e:
+            logger.debug(f"OTA 시도 상태 저장 실패: {e}")
+
+    def _clear_update_state(self):
+        """업데이트가 정상 완료(또는 불필요)되면 시도 기록을 삭제합니다."""
+        try:
+            if os.path.exists(self._state_path()):
+                os.remove(self._state_path())
+        except Exception:
+            pass
 
     def _download(self, version: str, dest_path: str) -> bool:
         """서버에서 새 버전 exe를 다운로드합니다."""

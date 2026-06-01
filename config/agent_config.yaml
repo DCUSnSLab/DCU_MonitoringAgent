@@ -4,7 +4,7 @@
 agent:
   id: ""                        # auto-generate
   lab_name: "lab1"
-  version: "1.0.20"
+  version: "1.0.27"
 
 monitoring:
   interval_seconds: 1

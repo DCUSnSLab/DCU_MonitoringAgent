@@ -23,10 +23,23 @@ set /p "NEW_VERSION=2. Enter new version (current: !CURRENT_VERSION!, press Ente
 if "!NEW_VERSION!"=="" set "NEW_VERSION=!CURRENT_VERSION!"
 echo    Using version: !NEW_VERSION!
 
-REM Update config file if version changed
-if not "!NEW_VERSION!"=="!CURRENT_VERSION!" (
-    powershell -NoProfile -Command "(Get-Content '%CONFIG_FILE%' -Encoding UTF8) -replace '  version: \".*\"', '  version: \"!NEW_VERSION!\"' | Set-Content '%CONFIG_FILE%' -Encoding UTF8"
-    echo    Updated %CONFIG_FILE%
+REM --- 2a. Write version into config (single source of truth for the build) ---
+REM Tolerant regex: matches the version line regardless of indentation / quotes.
+powershell -NoProfile -Command "$v='!NEW_VERSION!'; $p='%CONFIG_FILE%'; $q=[char]34; (Get-Content $p -Encoding UTF8) -replace '^(\s*)version:\s*.*$', ('${1}version: ' + $q + $v + $q) | Set-Content $p -Encoding UTF8"
+echo    Updated %CONFIG_FILE%
+
+REM --- 2b. Read it back and verify the edit actually took effect ---
+REM This guarantees the version compiled into the exe matches the version we upload.
+set "EXE_VERSION="
+for /f "tokens=2 delims=: " %%a in ('findstr /C:"version:" %CONFIG_FILE%') do set "EXE_VERSION=%%~a"
+echo    Version written to config: !EXE_VERSION!
+if not "!EXE_VERSION!"=="!NEW_VERSION!" (
+    echo ========================================================
+    echo [ERROR] Failed to write version into %CONFIG_FILE%.
+    echo         Expected "!NEW_VERSION!" but file has "!EXE_VERSION!".
+    echo         Aborting to avoid an exe/server version mismatch ^(OTA loop^).
+    echo ========================================================
+    goto end_script
 )
 
 REM --- 3. Check duplicate version on server ---

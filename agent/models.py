@@ -105,6 +105,8 @@ class StatusReport(BaseModel):
     """주기적 상태 보고 데이터"""
     message_type: str = "status_report"
     agent_id: str
+    hostname: str = ""
+    ip_address: str = ""
     timestamp: datetime = Field(default_factory=datetime.now)
     agent_version: str = ""
     user_state: UserState = UserState.SAFE
