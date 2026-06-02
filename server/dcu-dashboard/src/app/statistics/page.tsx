@@ -203,7 +203,7 @@ export default function StatisticsPage() {
             <span className="value">{totals.agentCount}</span>
           </div>
           <div className="summary-card">
-            <span className="label">총 방문 횟수</span>
+            <span className="label">차단 감지 횟수</span>
             <span className="value" style={{ color: 'var(--accent-light)' }}>
               {totals.access}
             </span>
@@ -330,7 +330,7 @@ export default function StatisticsPage() {
               <th>차단 사이트</th>
               <th>활성 시간</th>
               <th>백그라운드 시간</th>
-              <th>방문</th>
+              <th>차단 감지</th>
               <th>최초 접속</th>
               <th>최근 접속</th>
             </tr>
