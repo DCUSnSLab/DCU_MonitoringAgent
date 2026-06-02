@@ -566,8 +566,19 @@ html, body {
 .stat-empty {
   height: 240px;
   display: flex;
+  flex-direction: column;
+  gap: 4px;
   align-items: center;
   justify-content: center;
+  text-align: center;
   color: var(--text-muted);
   font-size: 13px;
 }
+
+.stat-chart-desc {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  margin: -6px 0 12px;
+}
+.stat-chart-desc b { color: var(--text-secondary); font-weight: 600; }
