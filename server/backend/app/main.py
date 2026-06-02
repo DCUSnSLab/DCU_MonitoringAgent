@@ -10,7 +10,7 @@ from sqlalchemy import select, update
 from app.config import settings
 from app.database import Base, AsyncSessionLocal, engine
 from app.models import Agent
-from app.routers import agents, dashboard, ws, ota
+from app.routers import agents, dashboard, ws, ota, statistics
 from app.services import agent_service
 from app.services.ws_manager import ws_manager
 
@@ -67,9 +67,21 @@ async def _offline_watchdog():
             logger.error(f"오프라인 감지 오류: {e}")
 
 
+async def _retention_cleanup():
+    """주기적으로 보관 기간이 지난 원시 데이터/통계를 정리합니다 (하루 1회)."""
+    while True:
+        try:
+            async with AsyncSessionLocal() as db:
+                await agent_service.cleanup_old_data(db, settings.retention_days)
+                await db.commit()
+        except Exception as e:
+            logger.error(f"보관 정리 오류: {e}")
+        await asyncio.sleep(86400)  # 24시간
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """앱 시작 시 DB 테이블 자동 생성 + 오프라인 감지 태스크 시작"""
+    """앱 시작 시 DB 테이블 자동 생성 + 오프라인 감지/보관 정리 태스크 시작"""
     logger.info("DCU Monitoring Server 시작 중...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -79,9 +91,14 @@ async def lifespan(app: FastAPI):
     watchdog = asyncio.create_task(_offline_watchdog())
     logger.info(f"오프라인 감지 태스크 시작 (임계값: {OFFLINE_THRESHOLD_SECONDS}초)")
 
+    # 백그라운드 보관 정리 시작
+    cleanup = asyncio.create_task(_retention_cleanup())
+    logger.info(f"보관 정리 태스크 시작 (보관 기간: {settings.retention_days}일)")
+
     yield
 
     watchdog.cancel()
+    cleanup.cancel()
     logger.info("서버 종료")
 
 
@@ -107,6 +124,7 @@ app.include_router(agents.router)
 app.include_router(dashboard.router)
 app.include_router(ws.router)
 app.include_router(ota.router)
+app.include_router(statistics.router)
 
 
 @app.get("/")

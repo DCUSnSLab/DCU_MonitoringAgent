@@ -5,16 +5,20 @@
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Agent, AlertLogDB, StatusReportDB
+from app.config import settings
+from app.models import Agent, AlertLogDB, BlockedSiteDailyStat, StatusReportDB
 from app.schemas import AgentRegisterRequest, AgentSummary, DashboardSummary, StatusReportRequest
 
 logger = logging.getLogger(__name__)
+
+# 직전 보고로부터 이만큼(초)을 넘는 간격은 오프라인 공백으로 보고 시간 누적에서 제외한다.
+MAX_REPORT_GAP_SECONDS = 10
 
 
 async def upsert_agent(db: AsyncSession, req: AgentRegisterRequest) -> Agent:
@@ -205,5 +209,263 @@ async def check_and_mark_offline_agents(db: AsyncSession) -> list[str]:
         
     if offline_ids:
         await db.flush()
-        
+
     return offline_ids
+
+
+# ─── 차단 사이트 통계 ─────────────────────────────────────────────
+
+
+def _match_blocked_pattern(url: str) -> Optional[str]:
+    """URL이 차단 패턴에 부분일치하면 해당 패턴을, 아니면 None을 반환합니다."""
+    low = (url or "").lower()
+    for pat in settings.blocked_url_patterns:
+        if pat.lower() in low:
+            return pat.lower()
+    return None
+
+
+async def accumulate_blocked_site_stats(
+    db: AsyncSession,
+    req: StatusReportRequest,
+    prev_last_seen: Optional[datetime],
+) -> None:
+    """보고서에 열려 있던 차단 사이트 탭의 활성/백그라운드 시간을 일자별로 누적합니다.
+
+    개별 탭은 DB에 저장하지 않으므로, 직전 보고 이후 경과한 시간(delta)을
+    현재 열려 있는 각 차단 탭의 활성 여부에 따라 누적한다.
+    """
+    tabs = req.browser_details.chrome.tabs
+    if not tabs or not settings.blocked_url_patterns:
+        return
+
+    now = datetime.now(timezone.utc)
+
+    # 직전 보고로부터 경과 시간(초). 첫 보고/큰 공백은 누적에서 제외.
+    delta = 0
+    if prev_last_seen is not None:
+        if prev_last_seen.tzinfo is None:
+            prev_last_seen = prev_last_seen.replace(tzinfo=timezone.utc)
+        gap = (now - prev_last_seen).total_seconds()
+        delta = int(max(0, min(gap, MAX_REPORT_GAP_SECONDS)))
+
+    # 패턴별로 활성 여부 집계 (같은 패턴이 여러 탭에 있으면 하나라도 활성이면 활성으로 간주)
+    matched: dict[str, bool] = {}
+    for tab in tabs:
+        pat = _match_blocked_pattern(tab.url)
+        if pat is not None:
+            matched[pat] = matched.get(pat, False) or bool(tab.is_active)
+
+    if not matched:
+        return
+
+    today = now.date()
+    for pat, is_active in matched.items():
+        result = await db.execute(
+            select(BlockedSiteDailyStat).where(
+                BlockedSiteDailyStat.agent_id == req.agent_id,
+                BlockedSiteDailyStat.url_pattern == pat,
+                BlockedSiteDailyStat.stat_date == today,
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            row = BlockedSiteDailyStat(
+                agent_id=req.agent_id,
+                url_pattern=pat,
+                stat_date=today,
+                active_seconds=0,
+                background_seconds=0,
+                first_access_at=now,
+                last_access_at=now,
+            )
+            db.add(row)
+
+        if delta > 0:
+            if is_active:
+                row.active_seconds += delta
+            else:
+                row.background_seconds += delta
+
+        if row.first_access_at is None:
+            row.first_access_at = now
+        row.last_access_at = now
+
+
+async def cleanup_old_data(db: AsyncSession, retention_days: int) -> dict:
+    """보관 기간이 지난 원시 데이터와 통계를 삭제합니다.
+
+    SQLite는 대량 DELETE 시 FK CASCADE가 보장되지 않으므로 각 테이블을 명시적으로 삭제한다.
+    자식(alert_logs) → 부모(status_reports) 순서로 삭제한다.
+    """
+    cutoff_dt = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    cutoff_date = cutoff_dt.date()
+
+    alerts_res = await db.execute(
+        delete(AlertLogDB).where(AlertLogDB.detected_at < cutoff_dt)
+    )
+    reports_res = await db.execute(
+        delete(StatusReportDB).where(StatusReportDB.reported_at < cutoff_dt)
+    )
+    stats_res = await db.execute(
+        delete(BlockedSiteDailyStat).where(BlockedSiteDailyStat.stat_date < cutoff_date)
+    )
+    await db.flush()
+
+    deleted = {
+        "alert_logs": alerts_res.rowcount or 0,
+        "status_reports": reports_res.rowcount or 0,
+        "blocked_site_daily_stats": stats_res.rowcount or 0,
+    }
+    logger.info(f"보관 정리 완료(>{retention_days}일): {deleted}")
+    return deleted
+
+
+async def get_lab_list(db: AsyncSession) -> list[str]:
+    """등록된 에이전트의 강의실 이름 목록(중복 제거)을 반환합니다."""
+    result = await db.execute(
+        select(Agent.lab_name)
+        .where(Agent.lab_name.isnot(None))
+        .distinct()
+        .order_by(Agent.lab_name)
+    )
+    return [r[0] for r in result.all()]
+
+
+async def get_blocked_site_stats(
+    db: AsyncSession,
+    lab: Optional[str] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    agent_id: Optional[str] = None,
+) -> list[dict]:
+    """에이전트 × 차단 사이트별 활성/백그라운드 누적 시간과 방문 횟수를 반환합니다."""
+    stmt = (
+        select(
+            BlockedSiteDailyStat.agent_id,
+            Agent.hostname,
+            Agent.ip_address,
+            Agent.lab_name,
+            BlockedSiteDailyStat.url_pattern,
+            func.sum(BlockedSiteDailyStat.active_seconds),
+            func.sum(BlockedSiteDailyStat.background_seconds),
+            func.min(BlockedSiteDailyStat.first_access_at),
+            func.max(BlockedSiteDailyStat.last_access_at),
+        )
+        .join(Agent, Agent.agent_id == BlockedSiteDailyStat.agent_id, isouter=True)
+        .group_by(
+            BlockedSiteDailyStat.agent_id,
+            Agent.hostname,
+            Agent.ip_address,
+            Agent.lab_name,
+            BlockedSiteDailyStat.url_pattern,
+        )
+    )
+    if lab:
+        stmt = stmt.where(Agent.lab_name == lab)
+    if agent_id:
+        stmt = stmt.where(BlockedSiteDailyStat.agent_id == agent_id)
+    if date_from:
+        stmt = stmt.where(BlockedSiteDailyStat.stat_date >= date_from)
+    if date_to:
+        stmt = stmt.where(BlockedSiteDailyStat.stat_date <= date_to)
+
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    # 방문 횟수: 같은 필터 조건의 BLOCKED_URL 알림을 (agent_id, 패턴)별로 집계
+    visit_counts = await _blocked_visit_counts(db, lab, date_from, date_to, agent_id)
+
+    out = []
+    for (agent_id_, hostname, ip, lab_name, pattern,
+         active_s, background_s, first_at, last_at) in rows:
+        out.append({
+            "agent_id": agent_id_,
+            "hostname": hostname,
+            "ip_address": ip,
+            "lab_name": lab_name,
+            "url_pattern": pattern,
+            "active_seconds": int(active_s or 0),
+            "background_seconds": int(background_s or 0),
+            "access_count": visit_counts.get((agent_id_, pattern), 0),
+            "first_access_at": first_at,
+            "last_access_at": last_at,
+        })
+    # 활성+백그라운드 시간이 긴 순으로 정렬
+    out.sort(key=lambda r: r["active_seconds"] + r["background_seconds"], reverse=True)
+    return out
+
+
+async def _blocked_visit_counts(
+    db: AsyncSession,
+    lab: Optional[str],
+    date_from: Optional[date],
+    date_to: Optional[date],
+    agent_id: Optional[str],
+) -> dict[tuple, int]:
+    """BLOCKED_URL 알림을 (agent_id, 차단패턴)별 접근 횟수로 집계합니다."""
+    stmt = (
+        select(AlertLogDB.agent_id, AlertLogDB.url)
+        .join(Agent, Agent.agent_id == AlertLogDB.agent_id, isouter=True)
+        .where(AlertLogDB.code == "BLOCKED_URL")
+    )
+    if lab:
+        stmt = stmt.where(Agent.lab_name == lab)
+    if agent_id:
+        stmt = stmt.where(AlertLogDB.agent_id == agent_id)
+    if date_from:
+        stmt = stmt.where(AlertLogDB.detected_at >= datetime.combine(date_from, datetime.min.time(), tzinfo=timezone.utc))
+    if date_to:
+        stmt = stmt.where(AlertLogDB.detected_at < datetime.combine(date_to + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc))
+
+    result = await db.execute(stmt)
+    counts: dict[tuple, int] = {}
+    for agent_id_, url in result.all():
+        pat = _match_blocked_pattern(url or "")
+        if pat is None:
+            continue
+        key = (agent_id_, pat)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+async def get_blocked_access_timeline(
+    db: AsyncSession,
+    lab: Optional[str] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    agent_id: Optional[str] = None,
+) -> dict:
+    """차단 사이트 접근(BLOCKED_URL 알림)의 시간대별/일자별 분포를 반환합니다."""
+    base = (
+        select(AlertLogDB.detected_at)
+        .join(Agent, Agent.agent_id == AlertLogDB.agent_id, isouter=True)
+        .where(AlertLogDB.code == "BLOCKED_URL")
+    )
+    if lab:
+        base = base.where(Agent.lab_name == lab)
+    if agent_id:
+        base = base.where(AlertLogDB.agent_id == agent_id)
+    if date_from:
+        base = base.where(AlertLogDB.detected_at >= datetime.combine(date_from, datetime.min.time(), tzinfo=timezone.utc))
+    if date_to:
+        base = base.where(AlertLogDB.detected_at < datetime.combine(date_to + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc))
+
+    result = await db.execute(base)
+    detected_list = [r[0] for r in result.all()]
+
+    # 시간대(0~23) 히스토그램
+    hourly = {h: 0 for h in range(24)}
+    daily: dict[str, int] = {}
+    for dt in detected_list:
+        if dt is None:
+            continue
+        hourly[dt.hour] = hourly.get(dt.hour, 0) + 1
+        day_key = dt.date().isoformat()
+        daily[day_key] = daily.get(day_key, 0) + 1
+
+    return {
+        "hourly": [{"hour": h, "count": hourly[h]} for h in range(24)],
+        "daily": [{"date": d, "count": daily[d]} for d in sorted(daily.keys())],
+        "total": len(detected_list),
+    }

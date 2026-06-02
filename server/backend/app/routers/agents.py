@@ -58,6 +58,14 @@ async def receive_report(
     _: None = Depends(verify_api_key),
 ):
     """에이전트 상태 보고서 수신 및 저장"""
+    # 차단 사이트 시간 누적을 위해 upsert 전에 직전 보고 시각을 확보한다.
+    # (upsert_agent / save_status_report가 last_seen_at을 현재 시각으로 갱신하므로 그 전에 읽어야 함)
+    from app.models import Agent
+    prev_result = await db.execute(
+        select(Agent.last_seen_at).where(Agent.agent_id == req.agent_id)
+    )
+    prev_last_seen = prev_result.scalar_one_or_none()
+
     # 미등록 에이전트 자동 등록 (보고서에 담겨 온 IP/호스트명 활용)
     from app.schemas import AgentRegisterRequest as Reg
     await agent_service.upsert_agent(
@@ -71,6 +79,9 @@ async def receive_report(
     )
 
     report = await agent_service.save_status_report(db, req)
+
+    # 차단 사이트 활성/백그라운드 시간 누적
+    await agent_service.accumulate_blocked_site_stats(db, req, prev_last_seen)
 
     # 대시보드에 실시간 업데이트 push
     summary = await agent_service.get_agent_summary(db, req.agent_id)

@@ -144,6 +144,40 @@ class DashboardSummary(BaseModel):
     recent_alert_count: int
 
 
+# ─── 통계 응답 ───────────────────────────────────────────────────
+
+
+class BlockedSiteStatRow(BaseModel):
+    """에이전트 × 차단 사이트별 통계 한 행"""
+    agent_id: str
+    hostname: Optional[str] = None
+    ip_address: Optional[str] = None
+    lab_name: Optional[str] = None
+    url_pattern: str
+    active_seconds: int = 0
+    background_seconds: int = 0
+    access_count: int = 0
+    first_access_at: Optional[datetime] = None
+    last_access_at: Optional[datetime] = None
+
+
+class TimelineHourPoint(BaseModel):
+    hour: int
+    count: int
+
+
+class TimelineDayPoint(BaseModel):
+    date: str
+    count: int
+
+
+class BlockedAccessTimeline(BaseModel):
+    """차단 사이트 접근의 시간대별/일자별 분포"""
+    hourly: list[TimelineHourPoint] = []
+    daily: list[TimelineDayPoint] = []
+    total: int = 0
+
+
 # ─── WebSocket 메시지 ────────────────────────────────────────────
 
 

@@ -78,6 +78,43 @@ export interface WSMessage {
   data: Record<string, unknown>;
 }
 
+// ─── 통계 타입 ───
+export interface BlockedSiteStatRow {
+  agent_id: string;
+  hostname: string | null;
+  ip_address: string | null;
+  lab_name: string | null;
+  url_pattern: string;
+  active_seconds: number;
+  background_seconds: number;
+  access_count: number;
+  first_access_at: string | null;
+  last_access_at: string | null;
+}
+
+export interface TimelineHourPoint {
+  hour: number;
+  count: number;
+}
+
+export interface TimelineDayPoint {
+  date: string;
+  count: number;
+}
+
+export interface BlockedAccessTimeline {
+  hourly: TimelineHourPoint[];
+  daily: TimelineDayPoint[];
+  total: number;
+}
+
+export interface StatFilters {
+  lab?: string;
+  date_from?: string;
+  date_to?: string;
+  agent_id?: string;
+}
+
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
 async function apiFetch<T>(path: string): Promise<T> {
@@ -86,11 +123,26 @@ async function apiFetch<T>(path: string): Promise<T> {
   return res.json();
 }
 
+function statQuery(f: StatFilters): string {
+  const p = new URLSearchParams();
+  if (f.lab) p.set('lab', f.lab);
+  if (f.date_from) p.set('date_from', f.date_from);
+  if (f.date_to) p.set('date_to', f.date_to);
+  if (f.agent_id) p.set('agent_id', f.agent_id);
+  const q = p.toString();
+  return q ? `?${q}` : '';
+}
+
 export const api = {
   getSummary: () => apiFetch<DashboardSummary>('/api/dashboard/summary'),
   getAgents:  () => apiFetch<AgentSummary[]>('/api/dashboard/agents'),
   getAgent:   (id: string) => apiFetch<AgentDetail>(`/api/dashboard/agents/${id}`),
   getAlerts:  (limit = 50) => apiFetch<AlertLog[]>(`/api/dashboard/alerts?limit=${limit}`),
+  getLabs:    () => apiFetch<string[]>('/api/statistics/labs'),
+  getBlockedSiteStats: (f: StatFilters = {}) =>
+    apiFetch<BlockedSiteStatRow[]>(`/api/statistics/blocked-sites${statQuery(f)}`),
+  getStatTimeline: (f: StatFilters = {}) =>
+    apiFetch<BlockedAccessTimeline>(`/api/statistics/timeline${statQuery(f)}`),
 };
 
 export const WS_URL =

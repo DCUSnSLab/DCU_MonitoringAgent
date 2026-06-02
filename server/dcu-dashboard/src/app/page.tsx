@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AgentDetail, AgentSummary, AlertLog, DashboardSummary, WSMessage, WS_URL, api } from '@/lib/api';
 import AgentCard from '@/components/AgentCard';
 import AgentModal from '@/components/AgentModal';
+import Header from '@/components/Header';
 
 export default function DashboardPage() {
   const [summary, setSummary]         = useState<DashboardSummary | null>(null);
@@ -119,16 +120,12 @@ export default function DashboardPage() {
   return (
     <div className="dashboard-layout">
       {/* ── 헤더 ── */}
-      <header className="header">
-        <div className="header-logo">
-          <span className="logo-dot" />
-          DCU 실습실 모니터링
-        </div>
+      <Header>
         <div className={`ws-status ${wsStatus}`}>
           <span className="dot" />
           {wsStatus === 'connected' ? '실시간 연결됨' : wsStatus === 'connecting' ? '연결 중…' : '연결 끊김'}
         </div>
-      </header>
+      </Header>
 
       {/* ── 필터 옵션 ── */}
       <div style={{ padding: '0 2rem', marginTop: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
