@@ -242,7 +242,7 @@ export default function StatisticsPage() {
                       borderRadius: 8,
                       color: '#f0f4ff',
                     }}
-                    formatter={(v: number) => [`${v}분`, '']}
+                    formatter={(v) => [`${v}분`, '']}
                   />
                   <Legend wrapperStyle={{ fontSize: 12, color: CHART_AXIS }} />
                   <Bar dataKey="active" name="활성" fill="#ef4444" radius={[4, 4, 0, 0]} />
@@ -270,7 +270,7 @@ export default function StatisticsPage() {
                       borderRadius: 8,
                       color: '#f0f4ff',
                     }}
-                    formatter={(v: number) => [`${v}회`, '접근']}
+                    formatter={(v) => [`${v}회`, '접근']}
                     labelFormatter={(h) => `${h}시`}
                   />
                   <Bar dataKey="count" name="접근" radius={[4, 4, 0, 0]}>
@@ -301,7 +301,7 @@ export default function StatisticsPage() {
                       borderRadius: 8,
                       color: '#f0f4ff',
                     }}
-                    formatter={(v: number) => [`${v}회`, '접근']}
+                    formatter={(v) => [`${v}회`, '접근']}
                   />
                   <Line
                     type="monotone"

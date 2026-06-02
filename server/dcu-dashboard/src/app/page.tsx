@@ -12,6 +12,7 @@ export default function DashboardPage() {
   const [alerts, setAlerts]           = useState<AlertLog[]>([]);
   const [selected, setSelected]       = useState<AgentDetail | null>(null);
   const [selectedLab, setSelectedLab] = useState<string>('전체');
+  const [onlineOnly, setOnlineOnly]   = useState<boolean>(false);
   const [wsStatus, setWsStatus]       = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -105,9 +106,9 @@ export default function DashboardPage() {
   /* ── 렌더링 ── */
   /* ── 데이터 필터링 (강의실 기준) ── */
   const labs = ['전체', ...Array.from(new Set(agents.map((a) => a.lab_name || '기타'))).sort()];
-  const filteredAgents = selectedLab === '전체'
-    ? agents
-    : agents.filter((a) => (a.lab_name || '기타') === selectedLab);
+  const filteredAgents = agents
+    .filter((a) => selectedLab === '전체' || (a.lab_name || '기타') === selectedLab)
+    .filter((a) => !onlineOnly || a.is_online);
 
   const filteredAgentIds = new Set(filteredAgents.map((a) => a.agent_id));
   const filteredAlerts = selectedLab === '전체'
@@ -150,6 +151,27 @@ export default function DashboardPage() {
             <option key={lab} value={lab}>{lab === '전체' ? '🌐 전체 보기' : `🏢 ${lab}호`}</option>
           ))}
         </select>
+
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            cursor: 'pointer',
+            color: onlineOnly ? 'var(--safe)' : 'var(--text-secondary)',
+            fontSize: '14px',
+            fontWeight: 500,
+            userSelect: 'none',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={onlineOnly}
+            onChange={(e) => setOnlineOnly(e.target.checked)}
+            style={{ width: 16, height: 16, cursor: 'pointer', accentColor: 'var(--safe)' }}
+          />
+          🟢 온라인만 보기
+        </label>
       </div>
 
       {/* ── 본문 ── */}
