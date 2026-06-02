@@ -221,14 +221,28 @@ export default function StatisticsPage() {
             </span>
           </div>
         </div>
+        <p className="stat-chart-desc" style={{ marginTop: -12, marginBottom: 20 }}>
+          선택한 기간·강의실 조건의 합계입니다. <b>차단 감지 횟수</b>는 차단 사이트
+          접근이 감지된 건수(에이전트가 60초 내 중복은 1건으로 처리),
+          <b> 활성/백그라운드 시간</b>은 차단 사이트가 활성 탭/백그라운드 탭으로
+          열려 있던 누적 시간입니다(배포 이후 수집).
+        </p>
 
         {/* ── 차트 그리드 ── */}
         <div className="stat-chart-grid">
           {/* 사이트별 활성 vs 백그라운드 */}
           <div className="stat-chart-card">
             <p className="section-title">사이트별 활성 / 백그라운드 시간 (분)</p>
-            {siteChart.length === 0 ? (
-              <div className="stat-empty">데이터 없음</div>
+            <p className="stat-chart-desc">
+              차단 사이트를 화면에 직접 띄워 본 시간(활성)과 다른 탭 뒤에 열어둔
+              시간(백그라운드)을 사이트별로 합산한 값입니다(분).
+              <br />※ 활성/백그라운드 시간은 이 기능 배포 이후부터 에이전트 보고로 수집됩니다.
+            </p>
+            {siteChart.every((s) => s.active === 0 && s.background === 0) ? (
+              <div className="stat-empty">
+                아직 수집된 활성/백그라운드 시간이 없습니다.
+                <br />(차단 사이트가 열린 채로 에이전트가 보고하면 누적됩니다)
+              </div>
             ) : (
               <ResponsiveContainer width="100%" height={260}>
                 <BarChart data={siteChart} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
@@ -254,8 +268,13 @@ export default function StatisticsPage() {
 
           {/* 시간대별 접근 분포 */}
           <div className="stat-chart-card">
-            <p className="section-title">시간대(0~23시)별 접근 횟수</p>
-            {hourly.length === 0 ? (
+            <p className="section-title">시간대(0~23시)별 차단 감지 횟수</p>
+            <p className="stat-chart-desc">
+              선택한 기간의 모든 차단 감지를 발생 시각의 &lsquo;시(0~23)&rsquo;로 묶어 합산한
+              분포입니다. 예: 14시 막대 = 기간 내 오후 2시대에 발생한 차단 감지 건수 합계.
+              어느 시간대에 차단 사이트 접근이 몰리는지 파악하는 용도입니다.
+            </p>
+            {timeline && timeline.total === 0 ? (
               <div className="stat-empty">데이터 없음</div>
             ) : (
               <ResponsiveContainer width="100%" height={260}>
@@ -270,10 +289,10 @@ export default function StatisticsPage() {
                       borderRadius: 8,
                       color: '#f0f4ff',
                     }}
-                    formatter={(v) => [`${v}회`, '접근']}
+                    formatter={(v) => [`${v}회`, '차단 감지']}
                     labelFormatter={(h) => `${h}시`}
                   />
-                  <Bar dataKey="count" name="접근" radius={[4, 4, 0, 0]}>
+                  <Bar dataKey="count" name="차단 감지" radius={[4, 4, 0, 0]}>
                     {hourly.map((h) => (
                       <Cell key={h.hour} fill={h.count > 0 ? '#3b82f6' : '#243450'} />
                     ))}
@@ -285,7 +304,11 @@ export default function StatisticsPage() {
 
           {/* 일자별 추세 */}
           <div className="stat-chart-card" style={{ gridColumn: '1 / -1' }}>
-            <p className="section-title">일자별 접근 추세</p>
+            <p className="section-title">일자별 차단 감지 추세</p>
+            <p className="stat-chart-desc">
+              선택한 기간 동안 날짜별 차단 감지 횟수의 추세입니다.
+              특정 날짜에 차단 사이트 접근이 급증했는지 확인하는 용도입니다.
+            </p>
             {daily.length === 0 ? (
               <div className="stat-empty">데이터 없음</div>
             ) : (
@@ -301,12 +324,12 @@ export default function StatisticsPage() {
                       borderRadius: 8,
                       color: '#f0f4ff',
                     }}
-                    formatter={(v) => [`${v}회`, '접근']}
+                    formatter={(v) => [`${v}회`, '차단 감지']}
                   />
                   <Line
                     type="monotone"
                     dataKey="count"
-                    name="접근"
+                    name="차단 감지"
                     stroke="#60a5fa"
                     strokeWidth={2}
                     dot={{ r: 3, fill: '#60a5fa' }}
@@ -320,6 +343,10 @@ export default function StatisticsPage() {
         {/* ── 상세 테이블 ── */}
         <p className="section-title" style={{ marginTop: 8 }}>
           에이전트 × 차단 사이트 상세 ({filteredRows.length}건)
+        </p>
+        <p className="stat-chart-desc">
+          어떤 PC(컴퓨터 이름·IP·강의실)가 어떤 차단 사이트에 접근했는지,
+          활성/백그라운드 누적 시간과 차단 감지 횟수, 최초·최근 접속 시각을 보여줍니다.
         </p>
         <table className="alert-table">
           <thead>
