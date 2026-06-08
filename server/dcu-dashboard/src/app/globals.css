@@ -582,3 +582,21 @@ html, body {
   margin: -6px 0 12px;
 }
 .stat-chart-desc b { color: var(--text-secondary); font-weight: 600; }
+
+/* ─── 정렬 가능한 테이블 헤더 ─── */
+.alert-table.sortable thead th.sort-th {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: color var(--transition), background var(--transition);
+}
+.alert-table.sortable thead th.sort-th:hover {
+  color: var(--text-secondary);
+  background: var(--bg-card);
+}
+.alert-table.sortable thead th.sort-th.active {
+  color: var(--accent-light);
+}
+.alert-table.sortable thead th .sort-ind {
+  font-size: 10px;
+}
