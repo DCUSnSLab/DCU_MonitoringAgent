@@ -48,6 +48,28 @@ function isoDate(d: Date): string {
 const CHART_GRID = 'rgba(255,255,255,0.06)';
 const CHART_AXIS = '#8899bb';
 
+/* ── 상세 테이블 컬럼 정의 (정렬 가능) ── */
+type SortKey = keyof BlockedSiteStatRow;
+type SortDir = 'asc' | 'desc';
+const COLUMNS: {
+  key: SortKey;
+  label: string;
+  type: 'str' | 'num' | 'date';
+  align?: 'center';
+}[] = [
+  { key: 'hostname', label: '컴퓨터 이름', type: 'str' },
+  { key: 'ip_address', label: 'IP 주소', type: 'str' },
+  { key: 'lab_name', label: '강의실', type: 'str' },
+  { key: 'url_pattern', label: '차단 사이트', type: 'str' },
+  { key: 'active_seconds', label: '활성 시간', type: 'num' },
+  { key: 'background_seconds', label: '백그라운드 시간', type: 'num' },
+  { key: 'access_count', label: '차단 감지', type: 'num', align: 'center' },
+  { key: 'first_access_at', label: '최초 접속', type: 'date' },
+  { key: 'last_access_at', label: '최근 접속', type: 'date' },
+];
+// 컬럼 클릭 시 기본 정렬 방향: 문자열은 오름차순, 숫자/날짜는 내림차순
+const DEFAULT_DIR: Record<string, SortDir> = { str: 'asc', num: 'desc', date: 'desc' };
+
 export default function StatisticsPage() {
   const [labs, setLabs] = useState<string[]>([]);
   const [rows, setRows] = useState<BlockedSiteStatRow[]>([]);
@@ -61,6 +83,20 @@ export default function StatisticsPage() {
   const [dateFrom, setDateFrom] = useState<string>(monthAgo);
   const [dateTo, setDateTo] = useState<string>(today);
   const [agentQuery, setAgentQuery] = useState<string>('');
+
+  /* 상세 테이블 정렬 상태 (기본: 최근 접속 내림차순) */
+  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({
+    key: 'last_access_at',
+    dir: 'desc',
+  });
+
+  const handleSort = useCallback((key: SortKey, type: string) => {
+    setSort((prev) =>
+      prev.key === key
+        ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: DEFAULT_DIR[type] },
+    );
+  }, []);
 
   /* 강의실 목록 로드 (1회) */
   useEffect(() => {
@@ -104,6 +140,27 @@ export default function StatisticsPage() {
         r.agent_id.toLowerCase().includes(q),
     );
   }, [rows, agentQuery]);
+
+  /* 정렬 적용 (빈 값은 항상 맨 아래) */
+  const sortedRows = useMemo(() => {
+    const col = COLUMNS.find((c) => c.key === sort.key);
+    const arr = [...filteredRows];
+    arr.sort((a, b) => {
+      const va = a[sort.key];
+      const vb = b[sort.key];
+      const na = va === null || va === undefined || va === '';
+      const nb = vb === null || vb === undefined || vb === '';
+      if (na && nb) return 0;
+      if (na) return 1;
+      if (nb) return -1;
+      let cmp = 0;
+      if (col?.type === 'num') cmp = (va as number) - (vb as number);
+      else if (col?.type === 'date') cmp = Date.parse(va as string) - Date.parse(vb as string);
+      else cmp = String(va).localeCompare(String(vb), 'ko');
+      return sort.dir === 'asc' ? cmp : -cmp;
+    });
+    return arr;
+  }, [filteredRows, sort]);
 
   /* ── 차트 데이터 가공 ── */
   // 사이트별 활성 vs 백그라운드 시간 (분 단위 집계)
@@ -347,30 +404,36 @@ export default function StatisticsPage() {
         <p className="stat-chart-desc">
           어떤 PC(컴퓨터 이름·IP·강의실)가 어떤 차단 사이트에 접근했는지,
           활성/백그라운드 누적 시간과 차단 감지 횟수, 최초·최근 접속 시각을 보여줍니다.
+          <br />열 제목을 클릭하면 해당 항목 기준으로 정렬됩니다(다시 클릭 시 오름/내림 전환).
         </p>
-        <table className="alert-table">
+        <table className="alert-table sortable">
           <thead>
             <tr>
-              <th>컴퓨터 이름</th>
-              <th>IP 주소</th>
-              <th>강의실</th>
-              <th>차단 사이트</th>
-              <th>활성 시간</th>
-              <th>백그라운드 시간</th>
-              <th>차단 감지</th>
-              <th>최초 접속</th>
-              <th>최근 접속</th>
+              {COLUMNS.map((col) => (
+                <th
+                  key={col.key}
+                  onClick={() => handleSort(col.key, col.type)}
+                  className={`sort-th${sort.key === col.key ? ' active' : ''}`}
+                  style={col.align === 'center' ? { textAlign: 'center' } : undefined}
+                  title="클릭하여 정렬"
+                >
+                  {col.label}
+                  <span className="sort-ind">
+                    {sort.key === col.key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+                  </span>
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
-            {filteredRows.length === 0 ? (
+            {sortedRows.length === 0 ? (
               <tr>
                 <td colSpan={9} style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}>
                   {loading ? '불러오는 중…' : '해당 조건의 차단 사이트 접근 기록이 없습니다.'}
                 </td>
               </tr>
             ) : (
-              filteredRows.map((r) => (
+              sortedRows.map((r) => (
                 <tr key={`${r.agent_id}-${r.url_pattern}`}>
                   <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
                     {r.hostname ?? r.agent_id}
