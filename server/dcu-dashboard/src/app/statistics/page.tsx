@@ -18,6 +18,7 @@ import Header from '@/components/Header';
 import {
   api,
   BlockedAccessTimeline,
+  BlockedSiteDetail,
   BlockedSiteStatRow,
   StatFilters,
 } from '@/lib/api';
@@ -97,6 +98,26 @@ export default function StatisticsPage() {
         : { key, dir: DEFAULT_DIR[type] },
     );
   }, []);
+
+  /* 상세 드릴다운 모달 */
+  const [detail, setDetail] = useState<BlockedSiteDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  const openDetail = useCallback(async (row: BlockedSiteStatRow) => {
+    setDetailLoading(true);
+    setDetail({ ...row, daily: [], logs: [], log_total: 0 } as BlockedSiteDetail); // 즉시 헤더 표시
+    try {
+      const d = await api.getBlockedSiteDetail(row.agent_id, row.url_pattern, {
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+      });
+      setDetail(d);
+    } catch (e) {
+      console.error('상세 로드 실패:', e);
+    } finally {
+      setDetailLoading(false);
+    }
+  }, [dateFrom, dateTo]);
 
   /* 강의실 목록 로드 (1회) */
   useEffect(() => {
@@ -434,7 +455,12 @@ export default function StatisticsPage() {
               </tr>
             ) : (
               sortedRows.map((r) => (
-                <tr key={`${r.agent_id}-${r.url_pattern}`}>
+                <tr
+                  key={`${r.agent_id}-${r.url_pattern}`}
+                  className="stat-row-clickable"
+                  onClick={() => openDetail(r)}
+                  title="클릭하여 상세 접속/로그 보기"
+                >
                   <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
                     {r.hostname ?? r.agent_id}
                   </td>
@@ -460,6 +486,84 @@ export default function StatisticsPage() {
           </tbody>
         </table>
       </main>
+
+      {/* ── 상세 드릴다운 모달 ── */}
+      {detail && (
+        <div className="modal-overlay" onClick={() => setDetail(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">
+                {detail.hostname ?? detail.agent_id} · <span style={{ color: 'var(--danger)' }}>{detail.url_pattern}</span>
+              </span>
+              <button className="modal-close" onClick={() => setDetail(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              {/* 기본 정보 */}
+              <p className="modal-section-title">대상 정보</p>
+              <div className="stat-detail-info">
+                <div><span>컴퓨터 이름</span><b>{detail.hostname ?? detail.agent_id}</b></div>
+                <div><span>IP 주소</span><b className="mono">{detail.ip_address ?? '-'}</b></div>
+                <div><span>강의실</span><b>{detail.lab_name ? `${detail.lab_name}호` : '-'}</b></div>
+                <div><span>차단 사이트</span><b className="mono" style={{ color: 'var(--danger)' }}>{detail.url_pattern}</b></div>
+              </div>
+
+              {/* 요약 */}
+              <p className="modal-section-title">요약</p>
+              <div className="stat-detail-summary">
+                <div><span>차단 감지</span><b>{detail.access_count}회</b></div>
+                <div><span>활성 시간</span><b style={{ color: 'var(--danger)' }}>{fmtDuration(detail.active_seconds)}</b></div>
+                <div><span>백그라운드 시간</span><b style={{ color: 'var(--warning)' }}>{fmtDuration(detail.background_seconds)}</b></div>
+                <div><span>최초 접속</span><b className="mono" style={{ fontSize: 11 }}>{fmtDateTime(detail.first_access_at)}</b></div>
+                <div><span>최근 접속</span><b className="mono" style={{ fontSize: 11 }}>{fmtDateTime(detail.last_access_at)}</b></div>
+              </div>
+
+              {/* 일자별 내역 */}
+              <p className="modal-section-title">일자별 내역</p>
+              {detail.daily.length === 0 ? (
+                <div className="stat-detail-empty">{detailLoading ? '불러오는 중…' : '내역 없음'}</div>
+              ) : (
+                <table className="alert-table" style={{ marginBottom: 4 }}>
+                  <thead>
+                    <tr><th>날짜</th><th>차단 감지</th><th>활성 시간</th><th>백그라운드 시간</th></tr>
+                  </thead>
+                  <tbody>
+                    {detail.daily.map((d) => (
+                      <tr key={d.date}>
+                        <td className="mono">{d.date}</td>
+                        <td style={{ textAlign: 'center' }}>{d.access_count}</td>
+                        <td style={{ color: 'var(--danger)' }}>{fmtDuration(d.active_seconds)}</td>
+                        <td style={{ color: 'var(--warning)' }}>{fmtDuration(d.background_seconds)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {/* 접속 로그 */}
+              <p className="modal-section-title">
+                접속 로그
+                {detail.log_total > detail.logs.length && (
+                  <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: 6 }}>
+                    (최근 {detail.logs.length}건 / 총 {detail.log_total}건)
+                  </span>
+                )}
+              </p>
+              {detail.logs.length === 0 ? (
+                <div className="stat-detail-empty">{detailLoading ? '불러오는 중…' : '로그 없음'}</div>
+              ) : (
+                <div className="stat-log-list">
+                  {detail.logs.map((log, i) => (
+                    <div key={i} className="stat-log-item">
+                      <span className="mono stat-log-time">{fmtDateTime(log.detected_at)}</span>
+                      <span className="mono stat-log-url" title={log.url ?? ''}>{log.url ?? log.message ?? '-'}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

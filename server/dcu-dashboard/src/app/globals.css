@@ -600,3 +600,64 @@ html, body {
 .alert-table.sortable thead th .sort-ind {
   font-size: 10px;
 }
+
+/* ─── 상세 행 클릭 ─── */
+.alert-table tbody tr.stat-row-clickable { cursor: pointer; }
+.alert-table tbody tr.stat-row-clickable:hover td { background: var(--bg-elevated); }
+
+/* ─── 상세 드릴다운 모달 ─── */
+.stat-detail-info,
+.stat-detail-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 16px;
+  margin-bottom: 6px;
+}
+.stat-detail-info > div,
+.stat-detail-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+}
+.stat-detail-info span,
+.stat-detail-summary span {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.stat-detail-info b,
+.stat-detail-summary b { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+
+.stat-detail-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+}
+
+.stat-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+}
+.stat-log-item {
+  display: flex;
+  gap: 12px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.stat-log-item:nth-child(odd) { background: var(--bg-elevated); }
+.stat-log-time { color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+.stat-log-url { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

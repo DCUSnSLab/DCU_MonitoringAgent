@@ -178,6 +178,39 @@ class BlockedAccessTimeline(BaseModel):
     total: int = 0
 
 
+class BlockedSiteDetailDay(BaseModel):
+    """특정 에이전트×사이트의 일자별 내역"""
+    date: str
+    active_seconds: int = 0
+    background_seconds: int = 0
+    access_count: int = 0
+
+
+class BlockedSiteLogEntry(BaseModel):
+    """개별 차단 접근 로그 (alert_logs 한 건)"""
+    detected_at: datetime
+    level: str
+    url: Optional[str] = None
+    message: Optional[str] = None
+
+
+class BlockedSiteDetail(BaseModel):
+    """상세 행 클릭 시 보여줄 에이전트×사이트 드릴다운 정보"""
+    agent_id: str
+    hostname: Optional[str] = None
+    ip_address: Optional[str] = None
+    lab_name: Optional[str] = None
+    url_pattern: str
+    active_seconds: int = 0
+    background_seconds: int = 0
+    access_count: int = 0
+    first_access_at: Optional[datetime] = None
+    last_access_at: Optional[datetime] = None
+    daily: list[BlockedSiteDetailDay] = []
+    logs: list[BlockedSiteLogEntry] = []
+    log_total: int = 0
+
+
 # ─── WebSocket 메시지 ────────────────────────────────────────────
 
 

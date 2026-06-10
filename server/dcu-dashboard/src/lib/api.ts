@@ -115,6 +115,36 @@ export interface StatFilters {
   agent_id?: string;
 }
 
+export interface BlockedSiteDetailDay {
+  date: string;
+  active_seconds: number;
+  background_seconds: number;
+  access_count: number;
+}
+
+export interface BlockedSiteLogEntry {
+  detected_at: string;
+  level: string;
+  url: string | null;
+  message: string | null;
+}
+
+export interface BlockedSiteDetail {
+  agent_id: string;
+  hostname: string | null;
+  ip_address: string | null;
+  lab_name: string | null;
+  url_pattern: string;
+  active_seconds: number;
+  background_seconds: number;
+  access_count: number;
+  first_access_at: string | null;
+  last_access_at: string | null;
+  daily: BlockedSiteDetailDay[];
+  logs: BlockedSiteLogEntry[];
+  log_total: number;
+}
+
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
 async function apiFetch<T>(path: string): Promise<T> {
@@ -143,6 +173,12 @@ export const api = {
     apiFetch<BlockedSiteStatRow[]>(`/api/statistics/blocked-sites${statQuery(f)}`),
   getStatTimeline: (f: StatFilters = {}) =>
     apiFetch<BlockedAccessTimeline>(`/api/statistics/timeline${statQuery(f)}`),
+  getBlockedSiteDetail: (agentId: string, site: string, f: StatFilters = {}) => {
+    const p = new URLSearchParams({ agent_id: agentId, site });
+    if (f.date_from) p.set('date_from', f.date_from);
+    if (f.date_to) p.set('date_to', f.date_to);
+    return apiFetch<BlockedSiteDetail>(`/api/statistics/blocked-detail?${p.toString()}`);
+  },
 };
 
 export const WS_URL =
