@@ -499,6 +499,126 @@ async def get_blocked_site_stats(
     return out
 
 
+async def get_blocked_site_detail(
+    db: AsyncSession,
+    agent_id: str,
+    site: str,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    log_limit: int = 300,
+) -> dict:
+    """특정 에이전트 × 차단 사이트의 드릴다운 상세를 반환한다.
+
+    - 일자별 활성/백그라운드 시간(blocked_site_daily_stats) + 일자별 접근 횟수(alert_logs)
+    - 개별 차단 접근 로그(alert_logs, 최근 log_limit건)
+    - 요약(총 활성/백그라운드 시간, 총 접근 횟수, 최초/최근 접속)
+    """
+    lo, hi = _day_range_bounds(date_from, date_to)
+
+    # 에이전트 표시 정보
+    ag = (await db.execute(
+        select(Agent.hostname, Agent.ip_address, Agent.lab_name)
+        .where(Agent.agent_id == agent_id)
+    )).first()
+    hostname, ip, lab_name = ag if ag else (None, None, None)
+
+    # 1) 개별 차단 로그 (해당 site로 매핑되는 BLOCKED_URL 알림)
+    log_stmt = (
+        select(AlertLogDB.detected_at, AlertLogDB.level, AlertLogDB.url, AlertLogDB.message)
+        .where(AlertLogDB.code == "BLOCKED_URL", AlertLogDB.agent_id == agent_id)
+    )
+    if lo is not None:
+        log_stmt = log_stmt.where(AlertLogDB.detected_at >= lo)
+    if hi is not None:
+        log_stmt = log_stmt.where(AlertLogDB.detected_at < hi)
+    log_stmt = log_stmt.order_by(AlertLogDB.detected_at.desc())
+
+    all_logs = []          # site 일치 로그(시간 내림차순)
+    daily_access: dict[str, int] = {}
+    first_at = None
+    last_at = None
+    for detected_at, level, url, message in (await db.execute(log_stmt)).all():
+        if _blocked_site_key(url or "") != site:
+            continue
+        if detected_at is not None and detected_at.tzinfo is None:
+            detected_at = detected_at.replace(tzinfo=timezone.utc)
+        all_logs.append({"detected_at": detected_at, "level": level, "url": url, "message": message})
+        if detected_at is not None:
+            day = detected_at.date().isoformat()
+            daily_access[day] = daily_access.get(day, 0) + 1
+            if first_at is None or detected_at < first_at:
+                first_at = detected_at
+            if last_at is None or detected_at > last_at:
+                last_at = detected_at
+
+    access_count = len(all_logs)
+
+    # 2) 일자별 활성/백그라운드 시간
+    t_stmt = (
+        select(
+            BlockedSiteDailyStat.stat_date,
+            BlockedSiteDailyStat.active_seconds,
+            BlockedSiteDailyStat.background_seconds,
+            BlockedSiteDailyStat.first_access_at,
+            BlockedSiteDailyStat.last_access_at,
+        )
+        .where(
+            BlockedSiteDailyStat.agent_id == agent_id,
+            BlockedSiteDailyStat.url_pattern == site,
+        )
+    )
+    if date_from:
+        t_stmt = t_stmt.where(BlockedSiteDailyStat.stat_date >= date_from)
+    if date_to:
+        t_stmt = t_stmt.where(BlockedSiteDailyStat.stat_date <= date_to)
+
+    daily_time: dict[str, dict] = {}
+    total_active = 0
+    total_background = 0
+    for stat_date, active_s, background_s, f_at, l_at in (await db.execute(t_stmt)).all():
+        day = stat_date.isoformat()
+        daily_time[day] = {"active": int(active_s or 0), "background": int(background_s or 0)}
+        total_active += int(active_s or 0)
+        total_background += int(background_s or 0)
+        for ts in (f_at, l_at):
+            if ts is None:
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if first_at is None or ts < first_at:
+                first_at = ts
+            if last_at is None or ts > last_at:
+                last_at = ts
+
+    # 3) 일자별 병합 (접근 횟수 + 활성/백그라운드 시간)
+    all_days = sorted(set(daily_access) | set(daily_time), reverse=True)
+    daily = []
+    for day in all_days:
+        t = daily_time.get(day, {})
+        daily.append({
+            "date": day,
+            "active_seconds": t.get("active", 0),
+            "background_seconds": t.get("background", 0),
+            "access_count": daily_access.get(day, 0),
+        })
+
+    return {
+        "agent_id": agent_id,
+        "hostname": hostname,
+        "ip_address": ip,
+        "lab_name": lab_name,
+        "url_pattern": site,
+        "active_seconds": total_active,
+        "background_seconds": total_background,
+        "access_count": access_count,
+        "first_access_at": first_at,
+        "last_access_at": last_at,
+        "daily": daily,
+        "logs": all_logs[:log_limit],
+        "log_total": access_count,
+    }
+
+
 async def get_blocked_access_timeline(
     db: AsyncSession,
     lab: Optional[str] = None,

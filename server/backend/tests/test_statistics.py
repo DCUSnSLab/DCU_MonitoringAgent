@@ -184,6 +184,57 @@ async def test_blocked_sites_domain_fallback_appears(db):
     assert rows[0]["access_count"] == 1
 
 
+# ─── 상세 드릴다운 ───────────────────────────────────────────────
+
+async def test_blocked_site_detail_logs_and_daily(db):
+    """특정 에이전트×사이트 상세: 개별 로그 + 일자별 내역 + 시간 enrich."""
+    await add_agent(db, "a1", "a1", lab="501", ip="10.0.0.5")
+    d1 = utc(2026, 6, 1, 10)
+    d2 = utc(2026, 6, 2, 11)
+    await add_blocked_alert(db, "a1", "https://chatgpt.com/c/1", d1)
+    await add_blocked_alert(db, "a1", "https://chatgpt.com/c/2", d1 + timedelta(minutes=1))
+    await add_blocked_alert(db, "a1", "https://chatgpt.com/c/3", d2)
+    # 다른 사이트(상세에서 제외되어야 함)
+    await add_blocked_alert(db, "a1", "https://gemini.google.com/app", d1)
+    # 활성/백그라운드 시간(6/2)
+    await add_daily_stat(db, "a1", "chatgpt.com", date(2026, 6, 2), active=300, background=120)
+
+    detail = await agent_service.get_blocked_site_detail(
+        db, agent_id="a1", site="chatgpt.com",
+        date_from=date(2026, 6, 1), date_to=date(2026, 6, 2),
+    )
+    assert detail["hostname"] == "a1"
+    assert detail["ip_address"] == "10.0.0.5"
+    assert detail["url_pattern"] == "chatgpt.com"
+    assert detail["access_count"] == 3            # gemini 제외
+    assert detail["active_seconds"] == 300
+    assert detail["background_seconds"] == 120
+    assert detail["first_access_at"] == d1
+    assert detail["last_access_at"] == d2
+    # 로그는 시간 내림차순
+    assert detail["logs"][0]["detected_at"] == d2
+    assert all(l["url"] and "chatgpt.com" in l["url"] for l in detail["logs"])
+    # 일자별: 6/1(2건,시간0), 6/2(1건,active 300)
+    daily = {d["date"]: d for d in detail["daily"]}
+    assert daily["2026-06-01"]["access_count"] == 2
+    assert daily["2026-06-01"]["active_seconds"] == 0
+    assert daily["2026-06-02"]["access_count"] == 1
+    assert daily["2026-06-02"]["active_seconds"] == 300
+
+
+async def test_blocked_site_detail_log_limit(db):
+    """로그가 limit을 넘으면 잘리되 log_total은 전체 건수."""
+    await add_agent(db, "a1", "a1", lab="501")
+    base = utc(2026, 6, 1, 9)
+    for i in range(5):
+        await add_blocked_alert(db, "a1", "https://chatgpt.com/x", base + timedelta(minutes=i))
+    detail = await agent_service.get_blocked_site_detail(
+        db, agent_id="a1", site="chatgpt.com", log_limit=3
+    )
+    assert detail["log_total"] == 5
+    assert len(detail["logs"]) == 3
+
+
 # ─── 활성/백그라운드 시간 누적 ──────────────────────────────────
 
 async def test_accumulate_active_tab(db):
