@@ -106,11 +106,20 @@ async def save_status_report(db: AsyncSession, req: StatusReportRequest) -> Stat
         )
         db.add(alert_log)
 
-    # 에이전트 현재 상태 캐시 업데이트
+    # 에이전트 현재 상태 캐시 업데이트 (+ 대시보드용 최신 보고서 요약 비정규화)
     update_values = {
         "current_state": req.user_state,
         "last_seen_at": now,
         "is_online": True,
+        # 최신 보고서 요약 — 대시보드 목록이 이 값만 읽으면 되도록 여기서 함께 갱신
+        # (별도 쿼리 없이 기존 UPDATE 한 번에 얹는다)
+        "last_report_at": report.reported_at,
+        "process_count": report.process_count,
+        "chrome_tab_count": report.chrome_tab_count,
+        "alert_count": report.alert_count,
+        "cpu_percent": report.cpu_percent,
+        "memory_percent": report.memory_percent,
+        "foreground_window": report.foreground_window,
     }
     if req.agent_version:
         update_values["agent_version"] = req.agent_version
@@ -132,38 +141,17 @@ async def save_status_report(db: AsyncSession, req: StatusReportRequest) -> Stat
 
 
 async def get_agent_summary(db: AsyncSession, agent_id: str) -> Optional[AgentSummary]:
-    """단일 에이전트의 요약 정보를 반환합니다."""
+    """단일 에이전트의 요약 정보를 반환합니다.
+
+    최신 보고서 요약값(process_count/cpu 등)은 save_status_report에서 agents 행에
+    비정규화해 두므로, 여기서 status_reports를 조회하지 않는다(대량 테이블 스캔 제거).
+    """
     result = await db.execute(select(Agent).where(Agent.agent_id == agent_id))
     agent = result.scalar_one_or_none()
     if not agent:
         return None
 
-    # 마지막 보고서 조회
-    rpt_result = await db.execute(
-        select(StatusReportDB)
-        .where(StatusReportDB.agent_id == agent_id)
-        .order_by(StatusReportDB.reported_at.desc())
-        .limit(1)
-    )
-    last_report = rpt_result.scalar_one_or_none()
-
-    return AgentSummary(
-        agent_id=agent.agent_id,
-        hostname=agent.hostname,
-        lab_name=agent.lab_name,
-        ip_address=agent.ip_address,
-        current_state=agent.current_state,
-        is_online=agent.is_online,
-        last_seen_at=agent.last_seen_at,
-        process_count=last_report.process_count if last_report else 0,
-        chrome_tab_count=last_report.chrome_tab_count if last_report else 0,
-        alert_count=last_report.alert_count if last_report else 0,
-        foreground_window=last_report.foreground_window if last_report else None,
-        cpu_percent=last_report.cpu_percent if last_report else 0.0,
-        memory_percent=last_report.memory_percent if last_report else 0.0,
-        agent_version=agent.agent_version,
-        os_version=agent.os_version,
-    )
+    return AgentSummary.model_validate(agent)
 
 
 async def get_dashboard_summary(db: AsyncSession) -> DashboardSummary:

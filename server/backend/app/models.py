@@ -37,6 +37,17 @@ class Agent(Base):
     last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     is_online: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # 마지막 보고서 요약 캐시 (비정규화)
+    # 대시보드 목록 조회가 status_reports 대량 스캔 없이 agents 한 줄만 읽도록,
+    # 매 보고 시 save_status_report에서 아래 값을 함께 갱신한다.
+    last_report_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    process_count: Mapped[int] = mapped_column(Integer, default=0)
+    chrome_tab_count: Mapped[int] = mapped_column(Integer, default=0)
+    alert_count: Mapped[int] = mapped_column(Integer, default=0)
+    cpu_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    memory_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    foreground_window: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+
     registered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
