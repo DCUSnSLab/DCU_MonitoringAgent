@@ -61,16 +61,14 @@ async def get_summary(db: AsyncSession = Depends(get_db)):
 
 @router.get("/agents", response_model=list[AgentSummary])
 async def list_agents(db: AsyncSession = Depends(get_db)):
-    """전체 에이전트 목록 및 현재 상태 요약"""
+    """전체 에이전트 목록 및 현재 상태 요약.
+
+    각 에이전트의 최신 요약은 agents 행에 비정규화돼 있으므로 단일 쿼리로 조회한다.
+    (과거: 에이전트마다 status_reports에서 최신 보고서를 찾는 N+1 쿼리 → 수 분 소요)
+    """
     result = await db.execute(select(Agent).order_by(Agent.registered_at))
     agents = result.scalars().all()
-
-    summaries = []
-    for agent in agents:
-        summary = await agent_service.get_agent_summary(db, agent.agent_id)
-        if summary:
-            summaries.append(summary)
-    return summaries
+    return [AgentSummary.model_validate(a) for a in agents]
 
 
 @router.get("/agents/{agent_id}", response_model=AgentDetail)
