@@ -26,18 +26,19 @@ class StateAnalyzer:
         if not current_alerts:
             return UserState.SAFE
 
-        # DANGER(경고) 조건 검사
+        # DANGER(경고) 조건 검사: 알림 대상이 현재 화면에 활성화돼 있으면 DANGER.
+        # 알림 코드가 아니라 알림이 가리키는 대상(process_name / url)으로 판정하므로
+        # BLOCKED_PROCESS/UNAUTHORIZED_PROCESS/MESSENGER_DETECTED(프로세스),
+        # BLOCKED_URL/MESSENGER_DETECTED(URL)를 모두 동일하게 처리한다.
         for alert in current_alerts:
-            code = alert.code
-            
-            if code in ("UNAUTHORIZED_PROCESS", "BLOCKED_PROCESS"):
-                # 해당 프로세스가 포그라운드인지 검사
+            # 프로세스 기반 알림: 해당 프로세스가 포그라운드인지 검사
+            if alert.process_name:
                 for proc in report.processes:
                     if proc.name == alert.process_name and proc.is_foreground:
                         return UserState.DANGER
-            
-            elif code == "BLOCKED_URL":
-                # 해당 URL이 크롬의 활성화된 탭인지 검사
+
+            # URL 기반 알림: 해당 URL이 크롬의 활성화된 탭인지 검사
+            if alert.url:
                 chrome_info = report.browser_details.chrome
                 if chrome_info and chrome_info.tabs:
                     for tab in chrome_info.tabs:

@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import psutil
 
-from agent.config import ProcessConfig
+from agent.config import ProcessConfig, MessengerConfig
 from agent.models import Alert, ProcessInfo
 from agent.utils.logger import get_logger
 
@@ -38,8 +38,13 @@ class ProcessMonitor:
         "spoolsv.exe", "taskhostw.exe", "sihost.exe", "ctfmon.exe",
     }
 
-    def __init__(self, config: ProcessConfig):
+    def __init__(self, config: ProcessConfig, messenger: Optional[MessengerConfig] = None):
         self._config = config
+        # 메신저 프로세스명(소문자). 프로세스 모드(all/whitelist/blacklist)와 무관하게 항상 탐지.
+        self._messenger_names = (
+            [n.lower() for n in messenger.process_names]
+            if messenger and messenger.enabled else []
+        )
         # 이전 수집 결과 (PID → 프로세스 이름): 변경 감지용
         self._prev_pids: Dict[int, str] = {}
         # WMI 인스턴스 (상세 정보 수집용, 선택적)
@@ -114,13 +119,23 @@ class ProcessMonitor:
                     cmdline=cmdline,
                 )
 
+                # 메신저 프로세스 탐지 (whitelist/blacklist/all 모드와 무관하게 항상)
+                is_messenger = name in self._messenger_names
+                if is_messenger:
+                    alerts.append(Alert(
+                        level="warning",
+                        code="MESSENGER_DETECTED",
+                        message=f"메신저 실행 감지: {proc_info.name}",
+                        process_name=proc_info.name,
+                    ))
+
                 # 필터링 모드에 따른 처리
                 alert = self._check_process_alert(proc_info)
                 if alert:
                     alerts.append(alert)
 
-                # 모드별 수집 여부 결정
-                if self._should_include(name):
+                # 모드별 수집 여부 결정 (메신저는 모드와 무관하게 항상 보고에 포함)
+                if is_messenger or self._should_include(name):
                     processes.append(proc_info)
 
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):

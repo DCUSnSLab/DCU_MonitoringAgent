@@ -54,9 +54,9 @@ class DataCollector:
         self._ip_address = self._get_local_ip()
 
         # 모니터 초기화
-        self._process_monitor = ProcessMonitor(config.monitoring.process)
+        self._process_monitor = ProcessMonitor(config.monitoring.process, config.monitoring.messenger)
         self._window_monitor = WindowMonitor()
-        self._chrome_monitor = ChromeMonitor(config.monitoring.chrome)
+        self._chrome_monitor = ChromeMonitor(config.monitoring.chrome, config.monitoring.messenger)
 
         # 보고서 큐 (서버 전송용, 최대 N개)
         max_buf = config.server.offline_buffer_size

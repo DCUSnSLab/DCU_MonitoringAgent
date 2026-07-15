@@ -34,6 +34,20 @@ monitoring:
       - "bard.google.com"
       - "gemini.google.com"
 
+  messenger:
+    enabled: true
+    process_names:
+      - "kakaotalk.exe"
+      - "telegram.exe"
+      - "discord.exe"
+    url_patterns:
+      - "instagram.com"
+      - "facebook.com"
+      - "messenger.com"
+      - "web.whatsapp.com"
+      - "web.telegram.org"
+      - "discord.com"
+
 server:
   enabled: true
   base_url: "http://203.250.35.27:30085"

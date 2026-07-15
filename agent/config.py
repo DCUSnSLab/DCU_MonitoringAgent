@@ -39,12 +39,22 @@ class ChromeConfig(BaseModel):
     user_data_dir: str = "C:\\chrome-debug"
 
 
+class MessengerConfig(BaseModel):
+    """메신저 탐지 설정 (프로세스 whitelist/blacklist/all 모드와 무관하게 항상 탐지)"""
+    enabled: bool = True
+    # 탐지할 메신저 프로세스명 (예: kakaotalk.exe, telegram.exe, discord.exe)
+    process_names: List[str] = Field(default_factory=list)
+    # 탐지할 메신저 URL 부분일치 패턴 (예: instagram.com, facebook.com, messenger.com)
+    url_patterns: List[str] = Field(default_factory=list)
+
+
 class MonitoringConfig(BaseModel):
     """모니터링 통합 설정"""
     interval_seconds: int = 5
     track_foreground: bool = True
     process: ProcessConfig = Field(default_factory=ProcessConfig)
     chrome: ChromeConfig = Field(default_factory=ChromeConfig)
+    messenger: MessengerConfig = Field(default_factory=MessengerConfig)
 
 
 class ServerConfig(BaseModel):
