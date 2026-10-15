@@ -6,11 +6,21 @@ pywin32를 이용해 현재 포그라운드 창 및 각 프로세스의 창 제�
 - PID별 창 제목 매핑
 """
 
-from typing import Dict, Optional
+from typing import Dict, List, NamedTuple, Optional
+
+import psutil
 
 from agent.utils.logger import get_logger
 
 logger = get_logger("monitors.window")
+
+
+class VisibleWindow(NamedTuple):
+    """보이는 최상위 창 1개의 정보"""
+    hwnd: int
+    pid: int
+    process_name: str  # 소문자 (예: "chrome.exe"), 조회 실패 시 ""
+    title: str
 
 
 class WindowMonitor:
@@ -108,3 +118,49 @@ class WindowMonitor:
 
         logger.debug(f"창 제목 수집 완료: {len(pid_titles)}개")
         return pid_titles
+
+    def get_visible_windows(self) -> List[VisibleWindow]:
+        """
+        보이는 모든 최상위 창의 (hwnd, pid, 프로세스명, 제목) 목록을 반환합니다.
+
+        get_window_titles_by_pid()와 달리 같은 프로세스의 창이 여러 개여도
+        (예: 크롬 창 여러 개) 모두 반환합니다.
+
+        Returns:
+            VisibleWindow 목록
+        """
+        if not self._win32gui or not self._win32process:
+            return []
+
+        windows: List[VisibleWindow] = []
+        names: Dict[int, str] = {}
+
+        def enum_callback(hwnd, _):
+            try:
+                if not self._win32gui.IsWindowVisible(hwnd):
+                    return True
+                title = self._win32gui.GetWindowText(hwnd)
+                if not title:
+                    return True
+                _, pid = self._win32process.GetWindowThreadProcessId(hwnd)
+                if pid not in names:
+                    names[pid] = self._process_name(pid)
+                windows.append(VisibleWindow(hwnd, pid, names[pid], title))
+            except Exception:
+                pass
+            return True  # 계속 열거
+
+        try:
+            self._win32gui.EnumWindows(enum_callback, None)
+        except Exception as e:
+            logger.debug(f"창 목록 열거 실패: {e}")
+
+        return windows
+
+    @staticmethod
+    def _process_name(pid: int) -> str:
+        """PID의 프로세스 이름(소문자)을 반환합니다. 조회 실패 시 빈 문자열."""
+        try:
+            return psutil.Process(pid).name().lower()
+        except Exception:
+            return ""

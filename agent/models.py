@@ -83,6 +83,8 @@ class Alert(BaseModel):
     message: str = ""
     process_name: Optional[str] = None
     url: Optional[str] = None
+    # 창 제목 기반 탐지 시 탐지된 창의 제목 (포그라운드 여부 판정에 사용)
+    window_title: Optional[str] = None
     detected_at: datetime = Field(default_factory=datetime.now)
 
 

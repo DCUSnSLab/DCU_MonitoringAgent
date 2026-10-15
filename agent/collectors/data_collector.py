@@ -10,6 +10,7 @@ Producer-Consumer 패턴:
 """
 
 import os
+import re
 import json
 import queue
 import socket
@@ -29,10 +30,14 @@ from agent.monitors.chrome_monitor import ChromeMonitor
 from agent.monitors.process_monitor import ProcessMonitor
 from agent.monitors.window_monitor import WindowMonitor
 from agent.analyzers.state_analyzer import StateAnalyzer
+from agent.analyzers.title_detector import WindowTitleDetector
 from agent.utils.logger import get_logger
 
 
 logger = get_logger("collectors.data")
+
+# 창 제목 앞의 알림 개수 표시(예: "(3) ", "(9+) ")는 수시로 바뀌므로 중복 판정에서 제외한다.
+_NOTIFICATION_PREFIX = re.compile(r"^\(\d+\+?\)\s*")
 
 
 class DataCollector:
@@ -57,6 +62,7 @@ class DataCollector:
         self._process_monitor = ProcessMonitor(config.monitoring.process, config.monitoring.messenger)
         self._window_monitor = WindowMonitor()
         self._chrome_monitor = ChromeMonitor(config.monitoring.chrome, config.monitoring.messenger)
+        self._title_detector = WindowTitleDetector(config.monitoring.window_title)
 
         # 보고서 큐 (서버 전송용, 최대 N개)
         max_buf = config.server.offline_buffer_size
@@ -68,6 +74,7 @@ class DataCollector:
         logger.info("DataCollector 초기화 완료")
         logger.info(f"  프로세스 모드: {config.monitoring.process.mode}")
         logger.info(f"  크롬 CDP: {'활성' if config.monitoring.chrome.enabled else '비활성'}")
+        logger.info(f"  창 제목 탐지: {'활성' if config.monitoring.window_title.enabled else '비활성'}")
 
     # ─── 공개 메서드 ──────────────────────────────────────────────
 
@@ -100,6 +107,10 @@ class DataCollector:
         # 5. 크롬 탭 수집
         chrome_info, chrome_alerts = self._chrome_monitor.collect()
         all_alerts.extend(chrome_alerts)
+
+        # 5-1. 창 제목 기반 탐지 (CDP 없이 브라우저 창 제목으로 메신저·차단 사이트 탐지)
+        title_alerts = self._title_detector.check(self._window_monitor.get_visible_windows())
+        all_alerts.extend(title_alerts)
 
         # 6. 중복 알림 제거
         deduped_alerts = self._deduplicate_alerts(all_alerts)
@@ -195,8 +206,8 @@ class DataCollector:
             del self._recent_alert_keys[k]
 
         for alert in alerts:
-            # 알림 키: code + process_name 또는 url 조합
-            key = f"{alert.code}:{alert.process_name or alert.url or ''}"
+            # 알림 키: code + 대상(프로세스명 / URL / 창 제목)
+            key = f"{alert.code}:{self._alert_target(alert)}"
             if key not in self._recent_alert_keys:
                 self._recent_alert_keys[key] = now
                 result.append(alert)
@@ -204,6 +215,15 @@ class DataCollector:
                 logger.debug(f"중복 알림 제거: {key}")
 
         return result
+
+    @staticmethod
+    def _alert_target(alert: Alert) -> str:
+        """중복 판정에 쓸 알림 대상 (프로세스명 > URL > 알림 개수 표시를 뗀 창 제목)."""
+        if alert.process_name:
+            return alert.process_name
+        if alert.url:
+            return alert.url
+        return _NOTIFICATION_PREFIX.sub("", alert.window_title or "")
 
     def _log_summary(self, report: StatusReport):
         """수집 결과를 요약하여 로그로 출력합니다."""

@@ -21,6 +21,7 @@ class StateAnalyzer:
         2. DANGER: 알림의 원인이 된 대상이 현재 화면에서 활성화된(Active) 상태인 경우
            - 차단된 프로세스가 현재 포그라운드(Foreground) 프로세스일 때
            - 차단된 URL이 크롬의 현재 포커스 탭(is_active=True)일 때
+           - 창 제목으로 탐지된 창이 현재 포그라운드 창일 때
         3. WARNING: 알림 목록이 존재하지만, 모두 백그라운드에 숨어있는 경우
         """
         if not current_alerts:
@@ -44,6 +45,10 @@ class StateAnalyzer:
                     for tab in chrome_info.tabs:
                         if tab.url == alert.url and tab.is_active:
                             return UserState.DANGER
+
+            # 창 제목 기반 알림: 해당 창이 현재 포그라운드 창인지 검사
+            if alert.window_title and alert.window_title == report.foreground_window:
+                return UserState.DANGER
 
         # 알림이 있긴 하지만 아무것도 포그라운드에 노출되지 않았으므로 주의
         return UserState.WARNING

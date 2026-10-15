@@ -48,6 +48,25 @@ monitoring:
       - "web.telegram.org"
       - "discord.com"
 
+  # 창 제목 기반 탐지 (CDP 없이 브라우저 창 제목으로 탐지, 대소문자 무시·부분일치)
+  window_title:
+    enabled: true
+    browser_processes:
+      - "chrome.exe"
+      - "msedge.exe"
+      - "whale.exe"
+      - "firefox.exe"
+    messenger_keywords:
+      - "Instagram"
+      - "Facebook"
+      - "Messenger"
+      - "WhatsApp"
+      - "Telegram"
+      - "Discord"
+    blocked_keywords:
+      - "ChatGPT"
+      - "Gemini"
+
 server:
   enabled: true
   base_url: "http://203.250.35.27:30085"

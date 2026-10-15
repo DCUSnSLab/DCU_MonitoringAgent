@@ -48,6 +48,28 @@ class MessengerConfig(BaseModel):
     url_patterns: List[str] = Field(default_factory=list)
 
 
+class WindowTitleConfig(BaseModel):
+    """창 제목 기반 탐지 설정
+
+    CDP 없이도 브라우저 창 제목(= 그 창에서 보고 있는 탭의 제목)으로 메신저·차단 사이트를 탐지한다.
+    오탐을 줄이기 위해 browser_processes 에 해당하는 브라우저 창만 검사한다.
+    설정 파일에 섹션이 없어도(OTA로 갱신된 기존 PC) 동작하도록 기본값을 둔다.
+    """
+    enabled: bool = True
+    # 검사 대상 브라우저 프로세스
+    browser_processes: List[str] = Field(
+        default_factory=lambda: ["chrome.exe", "msedge.exe", "whale.exe", "firefox.exe"]
+    )
+    # 창 제목에 포함되면 메신저로 판단할 키워드 (대소문자 무시, 부분일치)
+    messenger_keywords: List[str] = Field(
+        default_factory=lambda: ["Instagram", "Facebook", "Messenger", "WhatsApp", "Telegram", "Discord"]
+    )
+    # 창 제목에 포함되면 차단 사이트로 판단할 키워드 (대소문자 무시, 부분일치)
+    blocked_keywords: List[str] = Field(
+        default_factory=lambda: ["ChatGPT", "Gemini"]
+    )
+
+
 class MonitoringConfig(BaseModel):
     """모니터링 통합 설정"""
     interval_seconds: int = 5
@@ -55,6 +77,7 @@ class MonitoringConfig(BaseModel):
     process: ProcessConfig = Field(default_factory=ProcessConfig)
     chrome: ChromeConfig = Field(default_factory=ChromeConfig)
     messenger: MessengerConfig = Field(default_factory=MessengerConfig)
+    window_title: WindowTitleConfig = Field(default_factory=WindowTitleConfig)
 
 
 class ServerConfig(BaseModel):
