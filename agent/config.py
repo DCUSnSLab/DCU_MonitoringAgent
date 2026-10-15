@@ -27,6 +27,11 @@ class ProcessConfig(BaseModel):
     mode: str = "all"  # all | whitelist | blacklist
     whitelist: List[str] = Field(default_factory=list)
     blacklist: List[str] = Field(default_factory=list)
+    # 프로세스 모드와 무관하게 항상 차단 프로그램으로 탐지할 목록 (AI 데스크톱 앱 등)
+    # 설정 키가 없는 기존 PC(OTA 갱신)에서도 동작하도록 기본값을 둔다.
+    always_blocked: List[str] = Field(
+        default_factory=lambda: ["claude.exe", "chatgpt.exe", "chatgpt classic.exe"]
+    )
 
 
 class ChromeConfig(BaseModel):
@@ -77,7 +82,7 @@ class WindowTitleConfig(BaseModel):
     )
     # 창 제목에 포함되면 차단 사이트로 판단할 키워드 (대소문자 무시, 부분일치)
     blocked_keywords: List[str] = Field(
-        default_factory=lambda: ["ChatGPT", "Gemini"]
+        default_factory=lambda: ["ChatGPT", "Gemini", "Claude"]
     )
 
 

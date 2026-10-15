@@ -45,6 +45,8 @@ class ProcessMonitor:
             [n.lower() for n in messenger.process_names]
             if messenger and messenger.enabled else []
         )
+        # 항상 차단으로 탐지할 프로그램(소문자). 프로세스 모드와 무관 (AI 데스크톱 앱 등)
+        self._always_blocked = [n.lower() for n in config.always_blocked]
         # 이전 수집 결과 (PID → 프로세스 이름): 변경 감지용
         self._prev_pids: Dict[int, str] = {}
         # WMI 인스턴스 (상세 정보 수집용, 선택적)
@@ -129,13 +131,23 @@ class ProcessMonitor:
                         process_name=proc_info.name,
                     ))
 
-                # 필터링 모드에 따른 처리
+                # 항상 차단 프로그램 탐지 (AI 데스크톱 앱 등, 프로세스 모드와 무관)
+                is_always_blocked = name in self._always_blocked
+                if is_always_blocked:
+                    alerts.append(Alert(
+                        level="warning",
+                        code="BLOCKED_PROCESS",
+                        message=f"차단된 프로그램 실행: {proc_info.name}",
+                        process_name=proc_info.name,
+                    ))
+
+                # 필터링 모드에 따른 처리 (blacklist 모드에서 같은 프로그램 중복 알림은 생략)
                 alert = self._check_process_alert(proc_info)
-                if alert:
+                if alert and not (is_always_blocked and alert.code == "BLOCKED_PROCESS"):
                     alerts.append(alert)
 
-                # 모드별 수집 여부 결정 (메신저는 모드와 무관하게 항상 보고에 포함)
-                if is_messenger or self._should_include(name):
+                # 모드별 수집 여부 결정 (메신저·항상 차단 프로그램은 모드와 무관하게 항상 보고에 포함)
+                if is_messenger or is_always_blocked or self._should_include(name):
                     processes.append(proc_info)
 
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):

@@ -22,6 +22,10 @@ monitoring:
       - "kakaotalk.exe"
       - "telegram.exe"
       - "discord.exe"
+    always_blocked:                  # 모드와 무관하게 항상 차단으로 탐지 (AI 데스크톱 앱)
+      - "claude.exe"
+      - "chatgpt.exe"
+      - "chatgpt classic.exe"
 
   chrome:
     enabled: true
@@ -33,6 +37,7 @@ monitoring:
       - "chatgpt.com"
       - "bard.google.com"
       - "gemini.google.com"
+      - "claude.ai"
 
   messenger:
     enabled: true
@@ -66,6 +71,7 @@ monitoring:
     blocked_keywords:
       - "ChatGPT"
       - "Gemini"
+      - "Claude"
 
 server:
   enabled: true
