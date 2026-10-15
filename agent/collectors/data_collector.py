@@ -17,13 +17,15 @@ import socket
 import uuid
 import platform
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from agent.config import AppConfig
 from agent.models import (
     AgentRegistration,
     Alert,
     BrowserDetails,
+    ChromeInfo,
+    ProcessInfo,
     StatusReport,
 )
 from agent.monitors.chrome_monitor import ChromeMonitor
@@ -109,7 +111,13 @@ class DataCollector:
         all_alerts.extend(chrome_alerts)
 
         # 5-1. 창 제목 기반 탐지 (CDP 없이 브라우저 창 제목으로 메신저·차단 사이트 탐지)
-        title_alerts = self._title_detector.check(self._window_monitor.get_visible_windows())
+        #      CDP가 이미 URL로 검사 중인 브라우저의 창은 제외해 같은 탭의 중복 알림을 막는다.
+        title_alerts = self._title_detector.check(
+            self._window_monitor.get_visible_windows(),
+            skip_pids=self._cdp_browser_pids(
+                processes, chrome_info, self._config.monitoring.chrome.debug_port
+            ),
+        )
         all_alerts.extend(title_alerts)
 
         # 6. 중복 알림 제거
@@ -215,6 +223,20 @@ class DataCollector:
                 logger.debug(f"중복 알림 제거: {key}")
 
         return result
+
+    @staticmethod
+    def _cdp_browser_pids(
+        processes: List[ProcessInfo], chrome_info: ChromeInfo, debug_port: int
+    ) -> Set[int]:
+        """CDP로 URL 검사 중인 브라우저 프로세스 PID (창 제목 탐지에서 제외할 대상).
+
+        CDP 응답이 있을 때만, 실행 인자에 우리 디버깅 포트가 붙은 프로세스를 고른다.
+        같은 PC에서 일반 크롬도 함께 쓰면 그 창들은 제외되지 않고 제목으로 계속 검사된다.
+        """
+        if not chrome_info.debug_mode:
+            return set()
+        port_flag = f"--remote-debugging-port={debug_port}"
+        return {p.pid for p in processes if p.cmdline and port_flag in p.cmdline}
 
     @staticmethod
     def _alert_target(alert: Alert) -> str:
