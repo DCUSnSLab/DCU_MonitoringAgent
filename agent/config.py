@@ -134,6 +134,17 @@ class AppConfig(BaseModel):
 
 # ─── 설정 관리 클래스 ────────────────────────────────────────────
 
+# OTA 갱신 시 번들 설정 값을 기준으로 맞출 탐지 정책 목록 (설정 경로)
+POLICY_LIST_PATHS = (
+    ("monitoring", "chrome", "blocked_urls"),
+    ("monitoring", "process", "always_blocked"),
+    ("monitoring", "messenger", "process_names"),
+    ("monitoring", "messenger", "url_patterns"),
+    ("monitoring", "window_title", "browser_processes"),
+    ("monitoring", "window_title", "messenger_keywords"),
+    ("monitoring", "window_title", "blocked_keywords"),
+)
+
 
 class ConfigManager:
     """
@@ -216,7 +227,11 @@ class ConfigManager:
                     if builtin_ws_url and self._config.server.ws_url != builtin_ws_url:
                         self._config.server.ws_url = builtin_ws_url
                         need_save = True
-                        
+
+                    # 3. 탐지 정책 목록 갱신 (OTA로 추가·변경된 탐지 대상이 기존 PC에도 반영되도록)
+                    if self._sync_policy_lists(builtin_raw):
+                        need_save = True
+
                     # 덮어쓴 최신 설정을 로컬 %APPDATA% 파일에도 바로 반영 (업데이트 동기화)
                     if need_save and getattr(self, "_config_path", None):
                         # agent_id 생성 전에 save()를 호출하면 id가 빈 값으로 저장될 수 있으므로
@@ -235,6 +250,27 @@ class ConfigManager:
             self._config.agent.id = self._generate_agent_id()
 
         return self._config
+
+    def _sync_policy_lists(self, builtin_raw: dict) -> bool:
+        """번들 설정에 있는 탐지 정책 목록으로 현재 설정을 덮어씁니다. 바뀐 항목이 있으면 True.
+
+        배포 PC는 OTA 갱신 후에도 기존 APPDATA 설정 파일을 계속 쓰므로,
+        버전·서버 주소와 마찬가지로 탐지 대상 목록도 번들 값을 기준으로 맞춘다.
+        """
+        changed = False
+        for path in POLICY_LIST_PATHS:
+            value = builtin_raw
+            for key in path:
+                value = value.get(key) if isinstance(value, dict) else None
+            if not isinstance(value, list):
+                continue
+            target = self._config
+            for key in path[:-1]:
+                target = getattr(target, key)
+            if getattr(target, path[-1]) != value:
+                setattr(target, path[-1], list(value))
+                changed = True
+        return changed
 
     def save(self) -> None:
         """현재 설정을 파일에 저장합니다."""
