@@ -21,6 +21,7 @@ from typing import List, Optional, Set
 
 from agent.config import AppConfig
 from agent.models import (
+    ActiveDetection,
     AgentRegistration,
     Alert,
     BrowserDetails,
@@ -140,6 +141,9 @@ class DataCollector:
         # 7-1. 사용자 상태 분류 (경고 팝업 중복 방지를 위해 deduped 되기 전의 '전체' 알림 기준)
         report.user_state = StateAnalyzer.evaluate(report, all_alerts)
 
+        # 7-2. 현재 탐지 중인 항목 (알림은 1분 단위로 중복 제거되므로, 지금 켜진 목록은 따로 전달)
+        report.active_detections = self._active_detections(report, all_alerts)
+
         # 8. 큐에 추가 (오버플로우 시 가장 오래된 항목 제거)
         self._enqueue_report(report)
 
@@ -223,6 +227,34 @@ class DataCollector:
                 logger.debug(f"중복 알림 제거: {key}")
 
         return result
+
+    @staticmethod
+    def _active_detections(report: StatusReport, alerts: List[Alert]) -> List[ActiveDetection]:
+        """이번 주기의 전체 알림(중복 제거 전)을 대상별 1건으로 요약합니다.
+
+        같은 프로그램의 여러 프로세스(예: claude.exe 수십 개)나 같은 사이트 창은 한 항목으로 합치고,
+        그중 하나라도 화면에 떠 있으면 is_foreground=True 로 표시한다.
+        """
+        items = {}
+        for alert in alerts:
+            if alert.process_name:
+                source, target = "process", alert.process_name
+            elif alert.url:
+                source, target = "url", alert.url
+            elif alert.window_title:
+                source, target = "title", alert.window_title
+            else:
+                continue
+
+            on_screen = StateAnalyzer.is_on_screen(report, alert)
+            key = (alert.code, DataCollector._alert_target(alert))
+            if key in items:
+                items[key].is_foreground = items[key].is_foreground or on_screen
+            else:
+                items[key] = ActiveDetection(
+                    code=alert.code, target=target, source=source, is_foreground=on_screen
+                )
+        return list(items.values())
 
     @staticmethod
     def _cdp_browser_pids(
