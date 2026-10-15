@@ -396,6 +396,21 @@ def _blocked_site_key(url: str) -> Optional[str]:
     return host or None
 
 
+def _blocked_alert_site(url: Optional[str], message: Optional[str]) -> Optional[str]:
+    """차단 알림 한 건의 사이트 키.
+
+    URL이 있으면 URL로, 없으면(에이전트가 창 제목으로 탐지한 알림) 메시지에 담긴
+    창 제목의 사이트명(settings.blocked_title_sites)으로 판정한다. 판정할 수 없으면 None.
+    """
+    if url:
+        return _blocked_site_key(url)
+    text = (message or "").lower()
+    for keyword, site in settings.blocked_title_sites.items():
+        if keyword.lower() in text:
+            return site
+    return None
+
+
 async def get_blocked_site_stats(
     db: AsyncSession,
     lab: Optional[str] = None,
@@ -413,7 +428,7 @@ async def get_blocked_site_stats(
 
     # ── 1) alert_logs 기반 접근 이벤트 집계 (source of truth) ──
     ev_stmt = (
-        select(AlertLogDB.agent_id, AlertLogDB.url, AlertLogDB.detected_at)
+        select(AlertLogDB.agent_id, AlertLogDB.url, AlertLogDB.message, AlertLogDB.detected_at)
         .join(Agent, Agent.agent_id == AlertLogDB.agent_id, isouter=True)
         .where(AlertLogDB.code == "BLOCKED_URL")
     )
@@ -427,8 +442,8 @@ async def get_blocked_site_stats(
         ev_stmt = ev_stmt.where(AlertLogDB.detected_at < hi)
 
     merged: dict[tuple, dict] = {}
-    for aid, url, dt in (await db.execute(ev_stmt)).all():
-        key_site = _blocked_site_key(url or "")
+    for aid, url, message, dt in (await db.execute(ev_stmt)).all():
+        key_site = _blocked_alert_site(url, message)
         if key_site is None:
             continue
         key = (aid, key_site)
@@ -563,7 +578,7 @@ async def get_blocked_site_detail(
     first_at = None
     last_at = None
     for detected_at, level, url, message in (await db.execute(log_stmt)).all():
-        if _blocked_site_key(url or "") != site:
+        if _blocked_alert_site(url, message) != site:
             continue
         if detected_at is not None and detected_at.tzinfo is None:
             detected_at = detected_at.replace(tzinfo=timezone.utc)
@@ -651,9 +666,12 @@ async def get_blocked_access_timeline(
     date_to: Optional[date] = None,
     agent_id: Optional[str] = None,
 ) -> dict:
-    """차단 사이트 접근(BLOCKED_URL 알림)의 시간대별/일자별 분포를 반환합니다."""
+    """차단 사이트 접근(BLOCKED_URL 알림)의 시간대별/일자별 분포를 반환합니다.
+
+    사이트 통계 표와 합계가 맞도록, 사이트를 판정할 수 없는 알림은 제외한다.
+    """
     base = (
-        select(AlertLogDB.detected_at)
+        select(AlertLogDB.detected_at, AlertLogDB.url, AlertLogDB.message)
         .join(Agent, Agent.agent_id == AlertLogDB.agent_id, isouter=True)
         .where(AlertLogDB.code == "BLOCKED_URL")
     )
@@ -668,7 +686,10 @@ async def get_blocked_access_timeline(
         base = base.where(AlertLogDB.detected_at < hi)
 
     result = await db.execute(base)
-    detected_list = [r[0] for r in result.all()]
+    detected_list = [
+        dt for dt, url, message in result.all()
+        if _blocked_alert_site(url, message) is not None
+    ]
 
     # 시간대(0~23) 히스토그램
     hourly = {h: 0 for h in range(24)}
