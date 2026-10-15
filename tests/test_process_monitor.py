@@ -41,9 +41,11 @@ class TestProcessMonitor:
     def test_whitelist_mode_filters_processes(self):
         """whitelist 모드에서 허용 목록 외 프로세스가 경고를 생성하는지 확인"""
         # 존재하지 않을 것 같은 프로세스만 허용
+        # (항상 차단 프로그램은 모드와 무관하게 보고에 포함되므로, 순수 whitelist 필터링만 보도록 비운다)
         config = ProcessConfig(
             mode="whitelist",
-            whitelist=["explorer.exe", "system"]
+            whitelist=["explorer.exe", "system"],
+            always_blocked=[],
         )
         monitor = ProcessMonitor(config)
         processes, alerts = monitor.collect()
