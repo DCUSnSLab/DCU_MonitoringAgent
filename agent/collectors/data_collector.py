@@ -19,6 +19,8 @@ import platform
 from datetime import datetime
 from typing import List, Optional, Set
 
+import psutil
+
 from agent.config import AppConfig
 from agent.models import (
     ActiveDetection,
@@ -26,12 +28,11 @@ from agent.models import (
     Alert,
     BrowserDetails,
     ChromeInfo,
-    ProcessInfo,
     StatusReport,
 )
 from agent.monitors.chrome_monitor import ChromeMonitor
 from agent.monitors.process_monitor import ProcessMonitor
-from agent.monitors.window_monitor import WindowMonitor
+from agent.monitors.window_monitor import VisibleWindow, WindowMonitor
 from agent.analyzers.state_analyzer import StateAnalyzer
 from agent.analyzers.title_detector import WindowTitleDetector
 from agent.utils.logger import get_logger
@@ -113,10 +114,11 @@ class DataCollector:
 
         # 5-1. 창 제목 기반 탐지 (CDP 없이 브라우저 창 제목으로 메신저·차단 사이트 탐지)
         #      CDP가 이미 URL로 검사 중인 브라우저의 창은 제외해 같은 탭의 중복 알림을 막는다.
+        windows = self._window_monitor.get_visible_windows()
         title_alerts = self._title_detector.check(
-            self._window_monitor.get_visible_windows(),
+            windows,
             skip_pids=self._cdp_browser_pids(
-                processes, chrome_info, self._config.monitoring.chrome.debug_port
+                windows, chrome_info, self._config.monitoring.chrome.debug_port
             ),
         )
         all_alerts.extend(title_alerts)
@@ -258,17 +260,26 @@ class DataCollector:
 
     @staticmethod
     def _cdp_browser_pids(
-        processes: List[ProcessInfo], chrome_info: ChromeInfo, debug_port: int
+        windows: List[VisibleWindow], chrome_info: ChromeInfo, debug_port: int
     ) -> Set[int]:
         """CDP로 URL 검사 중인 브라우저 프로세스 PID (창 제목 탐지에서 제외할 대상).
 
-        CDP 응답이 있을 때만, 실행 인자에 우리 디버깅 포트가 붙은 프로세스를 고른다.
-        같은 PC에서 일반 크롬도 함께 쓰면 그 창들은 제외되지 않고 제목으로 계속 검사된다.
+        CDP 응답이 있을 때만, 창을 가진 크롬 계열 프로세스 중 실행 인자에 우리 디버깅 포트가
+        붙은 것을 고른다. 프로세스 모드(whitelist 등)로 걸러진 목록에 의존하지 않도록
+        창의 PID를 직접 조회한다. 같은 PC에서 일반 크롬도 함께 쓰면 그 창들은 계속 제목으로 검사된다.
         """
         if not chrome_info.debug_mode:
             return set()
         port_flag = f"--remote-debugging-port={debug_port}"
-        return {p.pid for p in processes if p.cmdline and port_flag in p.cmdline}
+        candidates = {w.pid for w in windows if w.process_name in ChromeMonitor.CHROME_PROCESS_NAMES}
+        pids: Set[int] = set()
+        for pid in candidates:
+            try:
+                if port_flag in " ".join(psutil.Process(pid).cmdline()):
+                    pids.add(pid)
+            except Exception:
+                continue
+        return pids
 
     @staticmethod
     def _alert_target(alert: Alert) -> str:

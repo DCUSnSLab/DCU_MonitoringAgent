@@ -15,7 +15,7 @@ from agent.analyzers.state_analyzer import StateAnalyzer
 from agent.analyzers.title_detector import WindowTitleDetector
 from agent.collectors.data_collector import DataCollector
 from agent.config import AppConfig, ProcessConfig, WindowTitleConfig
-from agent.models import Alert, ChromeInfo, ProcessInfo, StatusReport, UserState
+from agent.models import Alert, ChromeInfo, StatusReport, UserState
 from agent.monitors.process_monitor import ProcessMonitor
 from agent.monitors.window_monitor import VisibleWindow
 
@@ -132,13 +132,40 @@ class TestCollectorHelpers:
         assert DataCollector._alert_target(Alert(url="https://chatgpt.com/", window_title="t")) == "https://chatgpt.com/"
 
     def test_cdp_browser_pids(self):
-        procs = [
-            ProcessInfo(pid=1, name="chrome.exe", cmdline="chrome.exe --remote-debugging-port=9222"),
-            ProcessInfo(pid=2, name="chrome.exe", cmdline="chrome.exe"),
-            ProcessInfo(pid=3, name="whale.exe", cmdline=None),
+        """창을 가진 크롬 계열 프로세스 중 디버깅 포트 인자가 있는 PID만 (프로세스 모드와 무관)"""
+        windows = [
+            win("ChatGPT - Chrome", pid=1),
+            win("todo mate - Chrome", pid=2),
+            win("Gemini - Whale", "whale.exe", pid=3),
         ]
-        assert DataCollector._cdp_browser_pids(procs, ChromeInfo(debug_mode=True), 9222) == {1}
-        assert DataCollector._cdp_browser_pids(procs, ChromeInfo(debug_mode=False), 9222) == set()
+        cmdlines = {
+            1: ["chrome.exe", "--remote-debugging-port=9222", "--user-data-dir=C:\\chrome-debug"],
+            2: ["chrome.exe"],
+            3: ["whale.exe", "--remote-debugging-port=9222"],  # 크롬 계열이 아니면 대상 아님
+        }
+
+        class FakeProcess:
+            def __init__(self, pid):
+                self.pid = pid
+
+            def cmdline(self):
+                return cmdlines[self.pid]
+
+        with patch("agent.collectors.data_collector.psutil.Process", FakeProcess):
+            assert DataCollector._cdp_browser_pids(windows, ChromeInfo(debug_mode=True), 9222) == {1}
+            assert DataCollector._cdp_browser_pids(windows, ChromeInfo(debug_mode=False), 9222) == set()
+
+    def test_cdp_browser_pids_ignores_inaccessible_process(self):
+        """권한 등으로 조회 실패한 프로세스는 건너뜀"""
+        class DeniedProcess:
+            def __init__(self, pid):
+                pass
+
+            def cmdline(self):
+                raise PermissionError
+
+        with patch("agent.collectors.data_collector.psutil.Process", DeniedProcess):
+            assert DataCollector._cdp_browser_pids([win("x - Chrome")], ChromeInfo(debug_mode=True), 9222) == set()
 
 
 # ─── ProcessMonitor 항상 차단 프로그램 ─────────────────────────────
