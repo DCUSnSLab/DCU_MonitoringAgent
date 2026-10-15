@@ -109,6 +109,7 @@ async def get_agent_detail(agent_id: str, db: AsyncSession = Depends(get_db)):
         **summary.model_dump(),
         registered_at=agent.registered_at if agent else None,
         recent_alerts=alert_schemas,
+        active_detections=agent_service.get_active_detections(agent_id),
     )
 
 

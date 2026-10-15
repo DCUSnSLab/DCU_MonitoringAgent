@@ -57,6 +57,7 @@ async def _offline_watchdog():
                             "hostname": agent.hostname,
                             "is_online": False,
                             "current_state": agent.current_state,
+                            "active_detections": [],
                         })
 
                     # 요약 통계 재계산 후 브로드캐스트

@@ -13,12 +13,49 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import Agent, AlertLogDB, BlockedSiteDailyStat, StatusReportDB
-from app.schemas import AgentRegisterRequest, AgentSummary, DashboardSummary, StatusReportRequest
+from app.schemas import (
+    ActiveDetectionSchema,
+    AgentRegisterRequest,
+    AgentSummary,
+    DashboardSummary,
+    StatusReportRequest,
+)
 
 logger = logging.getLogger(__name__)
 
 # 직전 보고로부터 이만큼(초)을 넘는 간격은 오프라인 공백으로 보고 시간 누적에서 제외한다.
 MAX_REPORT_GAP_SECONDS = 10
+
+# ─── 현재 탐지 목록 (메모리 보관) ─────────────────────────────────
+# 에이전트가 매 보고마다 보내는 "지금 탐지 중인 항목"의 최신값.
+# 매초 바뀌는 휘발성 상태라 DB에 쌓지 않고 메모리에만 둔다
+# (WebSocket 매니저와 같은 단일 백엔드 레플리카 전제). 이 시간 넘게 갱신이 없으면 비어 있는 것으로 본다.
+ACTIVE_DETECTIONS_MAX_AGE_SECONDS = 10
+_active_detections: dict[str, tuple[datetime, list[ActiveDetectionSchema]]] = {}
+
+
+def set_active_detections(agent_id: str, items: list[ActiveDetectionSchema]) -> None:
+    """에이전트의 현재 탐지 목록을 최신값으로 교체한다."""
+    _active_detections[agent_id] = (datetime.now(timezone.utc), list(items))
+
+
+def get_active_detections(
+    agent_id: str, now: Optional[datetime] = None
+) -> list[ActiveDetectionSchema]:
+    """에이전트의 현재 탐지 목록. 갱신이 오래됐거나(오프라인 등) 없으면 빈 목록."""
+    entry = _active_detections.get(agent_id)
+    if entry is None:
+        return []
+    updated_at, items = entry
+    now = now or datetime.now(timezone.utc)
+    if (now - updated_at).total_seconds() > ACTIVE_DETECTIONS_MAX_AGE_SECONDS:
+        return []
+    return items
+
+
+def clear_active_detections(agent_id: str) -> None:
+    """에이전트의 현재 탐지 목록을 비운다 (명시적 오프라인 등)."""
+    _active_detections.pop(agent_id, None)
 
 
 async def upsert_agent(db: AsyncSession, req: AgentRegisterRequest) -> Agent:
