@@ -63,6 +63,7 @@ class WindowTitleDetector:
                     code="BLOCKED_URL",
                     message=f"차단 사이트 창 감지: {win.title}",
                     window_title=win.title,
+                    window_is_foreground=win.is_foreground,
                 ))
                 logger.debug(f"차단 사이트 창 감지: [{blocked}] {win.title}")
 
@@ -73,6 +74,7 @@ class WindowTitleDetector:
                     code="MESSENGER_DETECTED",
                     message=f"메신저 사이트 창 감지: {win.title}",
                     window_title=win.title,
+                    window_is_foreground=win.is_foreground,
                 ))
                 logger.debug(f"메신저 사이트 창 감지: [{messenger}] {win.title}")
 

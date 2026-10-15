@@ -21,6 +21,7 @@ class VisibleWindow(NamedTuple):
     pid: int
     process_name: str  # 소문자 (예: "chrome.exe"), 조회 실패 시 ""
     title: str
+    is_foreground: bool = False  # 열거 시점의 포그라운드 창인지 (hwnd 비교)
 
 
 class WindowMonitor:
@@ -134,6 +135,12 @@ class WindowMonitor:
 
         windows: List[VisibleWindow] = []
         names: Dict[int, str] = {}
+        # 포그라운드 여부는 제목 문자열이 아니라 같은 시점의 창 핸들로 판정한다.
+        # (수집 주기 앞부분에 읽은 포그라운드 제목과 비교하면 그 사이 탭 전환·알림 숫자 변화로 어긋남)
+        try:
+            fg_hwnd = self._win32gui.GetForegroundWindow()
+        except Exception:
+            fg_hwnd = None
 
         def enum_callback(hwnd, _):
             try:
@@ -145,7 +152,7 @@ class WindowMonitor:
                 _, pid = self._win32process.GetWindowThreadProcessId(hwnd)
                 if pid not in names:
                     names[pid] = self._process_name(pid)
-                windows.append(VisibleWindow(hwnd, pid, names[pid], title))
+                windows.append(VisibleWindow(hwnd, pid, names[pid], title, hwnd == fg_hwnd))
             except Exception:
                 pass
             return True  # 계속 열거

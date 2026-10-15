@@ -48,11 +48,12 @@ class TestActiveDetections:
         alerts = [
             Alert(code="MESSENGER_DETECTED", url="https://www.instagram.com/"),
             Alert(code="BLOCKED_URL", window_title="ChatGPT - Chrome"),
+            Alert(code="BLOCKED_URL", window_title="Google Gemini - Chrome", window_is_foreground=True),
         ]
-        items = {(i.code, i.source): i for i in DataCollector._active_detections(report, alerts)}
-        assert items[("MESSENGER_DETECTED", "url")].is_foreground is True
-        assert items[("BLOCKED_URL", "title")].target == "ChatGPT - Chrome"
-        assert items[("BLOCKED_URL", "title")].is_foreground is False
+        items = {(i.code, i.source, i.target): i for i in DataCollector._active_detections(report, alerts)}
+        assert items[("MESSENGER_DETECTED", "url", "https://www.instagram.com/")].is_foreground is True
+        assert items[("BLOCKED_URL", "title", "ChatGPT - Chrome")].is_foreground is False
+        assert items[("BLOCKED_URL", "title", "Google Gemini - Chrome")].is_foreground is True
 
     def test_notification_count_variants_merged(self):
         """창 제목 앞 알림 개수만 다른 같은 창은 1건"""

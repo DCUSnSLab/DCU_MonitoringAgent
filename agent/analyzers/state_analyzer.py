@@ -56,8 +56,8 @@ class StateAnalyzer:
                     if tab.url == alert.url and tab.is_active:
                         return True
 
-        # 창 제목 기반 알림: 해당 창이 현재 포그라운드 창인지
-        if alert.window_title and alert.window_title == report.foreground_window:
+        # 창 제목 기반 알림: 탐지 시점에 그 창이 포그라운드였는지 (창 핸들로 판정한 값)
+        if alert.window_title and alert.window_is_foreground:
             return True
 
         return False

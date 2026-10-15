@@ -20,8 +20,8 @@ from agent.monitors.process_monitor import ProcessMonitor
 from agent.monitors.window_monitor import VisibleWindow
 
 
-def win(title, process_name="chrome.exe", pid=100, hwnd=1):
-    return VisibleWindow(hwnd=hwnd, pid=pid, process_name=process_name, title=title)
+def win(title, process_name="chrome.exe", pid=100, hwnd=1, fg=False):
+    return VisibleWindow(hwnd=hwnd, pid=pid, process_name=process_name, title=title, is_foreground=fg)
 
 
 # ─── WindowTitleDetector ──────────────────────────────────────────
@@ -78,22 +78,41 @@ class TestWindowTitleDetector:
         detector = WindowTitleDetector(WindowTitleConfig(enabled=False))
         assert detector.check([win("ChatGPT - Chrome")]) == []
 
+    def test_foreground_flag_propagates(self):
+        """창의 포그라운드 여부(hwnd 판정)가 알림으로 전달됨"""
+        alerts = self.detector.check([win("ChatGPT - Chrome", fg=True), win("Instagram - Chrome", hwnd=2)])
+        by_code = {a.code: a for a in alerts}
+        assert by_code["BLOCKED_URL"].window_is_foreground is True
+        assert by_code["MESSENGER_DETECTED"].window_is_foreground is False
+
 
 # ─── StateAnalyzer (창 제목 알림) ─────────────────────────────────
 
 
 class TestStateWithWindowTitle:
 
-    def _alert(self, title):
-        return Alert(level="warning", code="BLOCKED_URL", message="t", window_title=title)
+    def _alert(self, title, fg):
+        return Alert(level="warning", code="BLOCKED_URL", message="t",
+                     window_title=title, window_is_foreground=fg)
 
     def test_foreground_window_is_danger(self):
         report = StatusReport(agent_id="A", foreground_window="ChatGPT - Chrome")
-        assert StateAnalyzer.evaluate(report, [self._alert("ChatGPT - Chrome")]) == UserState.DANGER
+        assert StateAnalyzer.evaluate(report, [self._alert("ChatGPT - Chrome", True)]) == UserState.DANGER
 
     def test_background_window_is_warning(self):
         report = StatusReport(agent_id="A", foreground_window="todo mate - Chrome")
-        assert StateAnalyzer.evaluate(report, [self._alert("ChatGPT - Chrome")]) == UserState.WARNING
+        assert StateAnalyzer.evaluate(report, [self._alert("ChatGPT - Chrome", False)]) == UserState.WARNING
+
+    def test_judged_by_window_handle_not_earlier_title(self):
+        """수집 주기 앞부분에 읽은 포그라운드 제목이 달라도(탭 전환·알림 숫자 변화)
+        탐지 시점에 그 창이 포그라운드였으면 경고"""
+        report = StatusReport(agent_id="A", foreground_window="(3) Instagram - Chrome")
+        assert StateAnalyzer.evaluate(report, [self._alert("ChatGPT - Chrome", True)]) == UserState.DANGER
+
+    def test_same_title_but_background_is_warning(self):
+        """제목이 같아도 탐지 시점에 포그라운드가 아니었으면 주의 (같은 제목 창이 여러 개인 경우)"""
+        report = StatusReport(agent_id="A", foreground_window="ChatGPT - Chrome")
+        assert StateAnalyzer.evaluate(report, [self._alert("ChatGPT - Chrome", False)]) == UserState.WARNING
 
 
 # ─── DataCollector 보조 함수 ──────────────────────────────────────
