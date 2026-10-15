@@ -68,6 +68,24 @@ class TestActiveDetections:
         report = StatusReport(agent_id="A")
         assert DataCollector._active_detections(report, [Alert(code="X")]) == []
 
+    def test_offline_buffer_excludes_active_detections(self, tmp_path):
+        """오프라인 버퍼 파일에는 현재 탐지 목록을 저장하지 않음 (재전송 시 과거 값 덮어쓰기 방지)"""
+        import json
+        from agent.config import ServerConfig
+        from agent.network.api_client import ApiClient
+
+        client = ApiClient(ServerConfig(), "A")
+        client._buffer_dir = str(tmp_path)
+        report = StatusReport(agent_id="A")
+        report.active_detections = DataCollector._active_detections(
+            StatusReport(agent_id="A"), [_proc_alert("claude.exe")]
+        )
+
+        assert client.buffer_report_offline(report) is True
+        saved = json.loads(next(tmp_path.glob("report_*.json")).read_text(encoding="utf-8"))
+        assert "active_detections" not in saved
+        assert saved["agent_id"] == "A"
+
     def test_report_serializes_active_detections(self):
         """서버로 보내는 JSON에 active_detections 포함"""
         import json

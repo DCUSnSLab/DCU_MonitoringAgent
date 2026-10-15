@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.models import Agent
-from app.routers import dashboard
+from app.routers import agents, dashboard
 from app.schemas import ActiveDetectionSchema, StatusReportRequest
 from app.services import agent_service
 
@@ -30,9 +30,9 @@ def test_report_accepts_active_detections():
     assert req.active_detections[0].is_foreground is True
 
 
-def test_old_agent_payload_defaults_empty():
-    """구버전 에이전트(필드 없음)는 빈 목록"""
-    assert StatusReportRequest(agent_id="A").active_detections == []
+def test_payload_without_field_is_none():
+    """필드가 없는 보고(구버전 에이전트·버퍼 재전송)는 None → 현재 목록을 건드리지 않음"""
+    assert StatusReportRequest(agent_id="A").active_detections is None
 
 
 def test_new_alert_field_ignored():
@@ -70,6 +70,27 @@ def test_clear_and_unknown():
     agent_service.clear_active_detections("A")
     assert agent_service.get_active_detections("A") == []
     assert agent_service.get_active_detections("NOPE") == []
+
+
+# ─── 보고 수신 ───────────────────────────────────────────────────
+
+LIVE = {"code": "BLOCKED_PROCESS", "target": "claude.exe", "source": "process"}
+
+
+async def test_buffered_report_keeps_current_detections(db):
+    """오프라인 버퍼에서 재전송된 과거 보고(필드 없음)는 현재 탐지 목록을 덮어쓰지 않음"""
+    await agents.receive_report(StatusReportRequest(agent_id="A", hostname="PC-521-01", active_detections=[LIVE]), db)
+    await agents.receive_report(StatusReportRequest(agent_id="A", hostname="PC-521-01"), db)
+
+    assert [d.target for d in agent_service.get_active_detections("A")] == ["claude.exe"]
+
+
+async def test_live_report_with_empty_list_clears(db):
+    """실시간 보고의 빈 목록은 '지금 탐지된 것 없음'이므로 비움"""
+    await agents.receive_report(StatusReportRequest(agent_id="A", hostname="PC-521-01", active_detections=[LIVE]), db)
+    await agents.receive_report(StatusReportRequest(agent_id="A", hostname="PC-521-01", active_detections=[]), db)
+
+    assert agent_service.get_active_detections("A") == []
 
 
 # ─── 상세 API ────────────────────────────────────────────────────

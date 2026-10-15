@@ -81,7 +81,9 @@ async def receive_report(
     report = await agent_service.save_status_report(db, req)
 
     # 지금 탐지 중인 항목 최신값 보관 (상세 모달 "현재 탐지 중" 표시용)
-    agent_service.set_active_detections(req.agent_id, req.active_detections)
+    # 필드가 없는 보고(구버전 에이전트·오프라인 버퍼 재전송)는 현재 목록을 건드리지 않는다.
+    if req.active_detections is not None:
+        agent_service.set_active_detections(req.agent_id, req.active_detections)
 
     # 차단 사이트 활성/백그라운드 시간 누적
     await agent_service.accumulate_blocked_site_stats(db, req, prev_last_seen)
@@ -89,13 +91,16 @@ async def receive_report(
     # 대시보드에 실시간 업데이트 push
     summary = await agent_service.get_agent_summary(db, req.agent_id)
     if summary:
-        await ws_manager.broadcast("agent_update", {
+        update = {
             **summary.model_dump(),
             "processes": [p.model_dump() for p in req.processes[:20]],
             "chrome_tabs": [t.model_dump() for t in req.browser_details.chrome.tabs],
             "alerts": [a.model_dump() for a in req.alerts],
-            "active_detections": [d.model_dump() for d in req.active_detections],
-        })
+        }
+        # 현재 탐지 목록이 담긴 보고일 때만 전달 (없으면 대시보드의 기존 목록 유지)
+        if req.active_detections is not None:
+            update["active_detections"] = [d.model_dump() for d in req.active_detections]
+        await ws_manager.broadcast("agent_update", update)
 
     # 전체 요약 통계도 실시간 브로드캐스트 (헤더 카드 즉시 갱신용)
     dashboard_summary = await agent_service.get_dashboard_summary(db)

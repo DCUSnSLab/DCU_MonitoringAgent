@@ -86,8 +86,9 @@ class StatusReportRequest(BaseModel):
     processes: list[ProcessInfoSchema] = []
     browser_details: BrowserDetailsSchema = BrowserDetailsSchema()
     alerts: list[AlertSchema] = []
-    # 지금 탐지 중인 항목 (구버전 에이전트는 보내지 않으므로 기본값 빈 목록)
-    active_detections: list[ActiveDetectionSchema] = []
+    # 지금 탐지 중인 항목. 필드가 없으면(None) 현재 목록을 건드리지 않는다
+    # (구버전 에이전트, 오프라인 버퍼에서 재전송되는 과거 보고)
+    active_detections: Optional[list[ActiveDetectionSchema]] = None
     foreground_window: Optional[str] = None
 
 
