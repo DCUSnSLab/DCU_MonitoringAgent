@@ -53,7 +53,15 @@ monitoring:
       - "web.telegram.org"
       - "discord.com"
 
-  # 창 제목 기반 탐지 (CDP 없이 브라우저 창 제목으로 탐지, 대소문자 무시·부분일치)
+  # 주소창 URL 읽기 (CDP 없이 크롬 계열 브라우저의 주소창을 읽어 blocked_urls·url_patterns 로 탐지)
+  address_bar:
+    enabled: true
+    browser_processes:
+      - "chrome.exe"
+      - "msedge.exe"
+      - "whale.exe"
+
+  # 창 제목 기반 탐지 (주소창을 읽지 못한 브라우저 창을 창 제목으로 탐지, 대소문자 무시·부분일치)
   window_title:
     enabled: true
     browser_processes:

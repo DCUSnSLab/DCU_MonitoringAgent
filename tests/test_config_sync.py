@@ -35,6 +35,8 @@ monitoring:
     always_blocked: ["claude.exe", "chatgpt.exe"]
   chrome:
     blocked_urls: ["chatgpt.com", "claude.ai"]
+  address_bar:
+    browser_processes: ["chrome.exe", "msedge.exe"]
   window_title:
     blocked_keywords: ["ChatGPT", "Claude"]
 server:
@@ -60,6 +62,7 @@ def test_policy_lists_synced_from_bundle(monkeypatch, tmp_path):
     assert cfg.monitoring.chrome.blocked_urls == ["chatgpt.com", "claude.ai"]
     assert cfg.monitoring.process.always_blocked == ["claude.exe", "chatgpt.exe"]
     assert cfg.monitoring.window_title.blocked_keywords == ["ChatGPT", "Claude"]
+    assert cfg.monitoring.address_bar.browser_processes == ["chrome.exe", "msedge.exe"]
     # 기존 동기화(버전·서버 주소)도 그대로 동작
     assert cfg.agent.version == "1.0.30"
     assert cfg.server.base_url == "http://new:30085"

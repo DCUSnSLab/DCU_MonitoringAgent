@@ -64,6 +64,21 @@ class MessengerConfig(BaseModel):
     )
 
 
+class AddressBarConfig(BaseModel):
+    """주소창 URL 읽기 설정
+
+    CDP 없이도 크롬 계열 브라우저 창의 주소창 글자를 UI Automation으로 읽어,
+    CDP와 같은 URL 목록(chrome.blocked_urls, messenger.url_patterns)으로 차단·메신저 사이트를 탐지한다.
+    주소창을 읽지 못한 창은 창 제목 탐지로 판정한다.
+    설정 파일에 섹션이 없어도(OTA로 갱신된 기존 PC) 동작하도록 기본값을 둔다.
+    """
+    enabled: bool = True
+    # 주소창을 읽을 브라우저 프로세스 (크로미움 계열만 지원)
+    browser_processes: List[str] = Field(
+        default_factory=lambda: ["chrome.exe", "msedge.exe", "whale.exe"]
+    )
+
+
 class WindowTitleConfig(BaseModel):
     """창 제목 기반 탐지 설정
 
@@ -93,6 +108,7 @@ class MonitoringConfig(BaseModel):
     process: ProcessConfig = Field(default_factory=ProcessConfig)
     chrome: ChromeConfig = Field(default_factory=ChromeConfig)
     messenger: MessengerConfig = Field(default_factory=MessengerConfig)
+    address_bar: AddressBarConfig = Field(default_factory=AddressBarConfig)
     window_title: WindowTitleConfig = Field(default_factory=WindowTitleConfig)
 
 
@@ -140,6 +156,7 @@ POLICY_LIST_PATHS = (
     ("monitoring", "process", "always_blocked"),
     ("monitoring", "messenger", "process_names"),
     ("monitoring", "messenger", "url_patterns"),
+    ("monitoring", "address_bar", "browser_processes"),
     ("monitoring", "window_title", "browser_processes"),
     ("monitoring", "window_title", "messenger_keywords"),
     ("monitoring", "window_title", "blocked_keywords"),

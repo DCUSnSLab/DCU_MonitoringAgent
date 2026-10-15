@@ -8,6 +8,7 @@
 - 메신저 키워드 일치 → MESSENGER_DETECTED
 
 창 제목은 그 창의 '앞에 보이는 탭' 하나만 반영하므로, 뒤에 숨은 탭은 CDP(URL) 탐지로만 잡힙니다.
+주소창 URL을 읽은 창은 URL로 판정하므로, 호출 측에서 skip_hwnds로 넘겨 제외합니다.
 """
 
 from typing import Iterable, List, Optional, Set
@@ -33,6 +34,7 @@ class WindowTitleDetector:
         self,
         windows: Iterable[VisibleWindow],
         skip_pids: Optional[Set[int]] = None,
+        skip_hwnds: Optional[Set[int]] = None,
     ) -> List[Alert]:
         """
         브라우저 창 제목을 검사하여 알림 목록을 반환합니다.
@@ -40,6 +42,7 @@ class WindowTitleDetector:
         Args:
             windows: 보이는 창 목록
             skip_pids: 검사에서 제외할 프로세스 PID (예: CDP로 이미 URL 검사 중인 브라우저)
+            skip_hwnds: 검사에서 제외할 창 핸들 (예: 주소창 URL로 이미 판정한 창)
 
         Returns:
             알림 목록 (창마다 차단·메신저 각 카테고리 최대 1건)
@@ -48,10 +51,11 @@ class WindowTitleDetector:
             return []
 
         skip = skip_pids or set()
+        skip_windows = skip_hwnds or set()
         alerts: List[Alert] = []
 
         for win in windows:
-            if win.process_name not in self._browsers or win.pid in skip:
+            if win.process_name not in self._browsers or win.pid in skip or win.hwnd in skip_windows:
                 continue
 
             title_lower = win.title.lower()

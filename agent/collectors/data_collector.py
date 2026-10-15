@@ -30,6 +30,7 @@ from agent.models import (
     ChromeInfo,
     StatusReport,
 )
+from agent.monitors.address_bar_monitor import AddressBarMonitor
 from agent.monitors.chrome_monitor import ChromeMonitor
 from agent.monitors.process_monitor import ProcessMonitor
 from agent.monitors.window_monitor import VisibleWindow, WindowMonitor
@@ -66,6 +67,9 @@ class DataCollector:
         self._process_monitor = ProcessMonitor(config.monitoring.process, config.monitoring.messenger)
         self._window_monitor = WindowMonitor()
         self._chrome_monitor = ChromeMonitor(config.monitoring.chrome, config.monitoring.messenger)
+        self._address_bar_monitor = AddressBarMonitor(
+            config.monitoring.address_bar, config.monitoring.chrome, config.monitoring.messenger
+        )
         self._title_detector = WindowTitleDetector(config.monitoring.window_title)
 
         # 보고서 큐 (서버 전송용, 최대 N개)
@@ -78,6 +82,7 @@ class DataCollector:
         logger.info("DataCollector 초기화 완료")
         logger.info(f"  프로세스 모드: {config.monitoring.process.mode}")
         logger.info(f"  크롬 CDP: {'활성' if config.monitoring.chrome.enabled else '비활성'}")
+        logger.info(f"  주소창 읽기: {'활성' if config.monitoring.address_bar.enabled else '비활성'}")
         logger.info(f"  창 제목 탐지: {'활성' if config.monitoring.window_title.enabled else '비활성'}")
 
     # ─── 공개 메서드 ──────────────────────────────────────────────
@@ -112,16 +117,9 @@ class DataCollector:
         chrome_info, chrome_alerts = self._chrome_monitor.collect()
         all_alerts.extend(chrome_alerts)
 
-        # 5-1. 창 제목 기반 탐지 (CDP 없이 브라우저 창 제목으로 메신저·차단 사이트 탐지)
-        #      CDP가 이미 URL로 검사 중인 브라우저의 창은 제외해 같은 탭의 중복 알림을 막는다.
+        # 5-1. 브라우저 창 단위 탐지 (CDP 없이 주소창 URL → 창 제목 순으로 메신저·차단 사이트 탐지)
         windows = self._window_monitor.get_visible_windows()
-        title_alerts = self._title_detector.check(
-            windows,
-            skip_pids=self._cdp_browser_pids(
-                windows, chrome_info, self._config.monitoring.chrome.debug_port
-            ),
-        )
-        all_alerts.extend(title_alerts)
+        all_alerts.extend(self._browser_window_alerts(windows, chrome_info))
 
         # 6. 중복 알림 제거
         deduped_alerts = self._deduplicate_alerts(all_alerts)
@@ -257,6 +255,26 @@ class DataCollector:
                     code=alert.code, target=target, source=source, is_foreground=on_screen
                 )
         return list(items.values())
+
+    def _browser_window_alerts(
+        self, windows: List[VisibleWindow], chrome_info: ChromeInfo
+    ) -> List[Alert]:
+        """CDP 없이 브라우저 창 단위로 메신저·차단 사이트를 탐지합니다.
+
+        판정 순서:
+          1) CDP가 URL로 검사 중인 브라우저의 창은 제외 (같은 탭의 중복 알림 방지)
+          2) 주소창 URL을 읽은 창은 URL로 판정
+             (대화 제목으로 창 제목이 바뀌는 ChatGPT도 탐지, 'Claude Monet' 같은 제목 키워드 오탐 방지)
+          3) 주소창을 읽지 못한 창(Firefox, 주소창 입력 중 등)만 창 제목 키워드로 판정
+        """
+        cdp_pids = self._cdp_browser_pids(
+            windows, chrome_info, self._config.monitoring.chrome.debug_port
+        )
+        address_urls, alerts = self._address_bar_monitor.collect(windows, skip_pids=cdp_pids)
+        alerts.extend(self._title_detector.check(
+            windows, skip_pids=cdp_pids, skip_hwnds=set(address_urls)
+        ))
+        return alerts
 
     @staticmethod
     def _cdp_browser_pids(
