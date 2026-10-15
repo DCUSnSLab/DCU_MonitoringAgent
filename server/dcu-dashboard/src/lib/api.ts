@@ -44,10 +44,19 @@ export interface AlertInfo {
   detected_at: string | null;
 }
 
+// 에이전트가 지금 탐지 중인 항목 (대상별 1건)
+export interface ActiveDetection {
+  code: string; // BLOCKED_PROCESS | UNAUTHORIZED_PROCESS | BLOCKED_URL | MESSENGER_DETECTED
+  target: string; // 프로세스명 / URL / 창 제목
+  source: string; // process | url | title
+  is_foreground: boolean; // 지금 화면에 띄워져 있는지
+}
+
 export interface AgentDetail extends AgentSummary {
   processes: ProcessInfo[];
   chrome_tabs: ChromeTab[];
   recent_alerts: AlertInfo[];
+  active_detections?: ActiveDetection[]; // 구버전 서버 응답에는 없을 수 있음
   registered_at: string | null;
 }
 
