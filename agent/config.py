@@ -40,12 +40,23 @@ class ChromeConfig(BaseModel):
 
 
 class MessengerConfig(BaseModel):
-    """메신저 탐지 설정 (프로세스 whitelist/blacklist/all 모드와 무관하게 항상 탐지)"""
+    """메신저 탐지 설정 (프로세스 whitelist/blacklist/all 모드와 무관하게 항상 탐지)
+
+    배포 PC는 OTA 갱신 시 기존 설정 파일(APPDATA)을 그대로 쓰므로,
+    messenger 섹션이 없는 PC에서도 탐지되도록 기본값을 둔다.
+    """
     enabled: bool = True
-    # 탐지할 메신저 프로세스명 (예: kakaotalk.exe, telegram.exe, discord.exe)
-    process_names: List[str] = Field(default_factory=list)
-    # 탐지할 메신저 URL 부분일치 패턴 (예: instagram.com, facebook.com, messenger.com)
-    url_patterns: List[str] = Field(default_factory=list)
+    # 탐지할 메신저 프로세스명
+    process_names: List[str] = Field(
+        default_factory=lambda: ["kakaotalk.exe", "telegram.exe", "discord.exe"]
+    )
+    # 탐지할 메신저 URL 부분일치 패턴
+    url_patterns: List[str] = Field(
+        default_factory=lambda: [
+            "instagram.com", "facebook.com", "messenger.com",
+            "web.whatsapp.com", "web.telegram.org", "discord.com",
+        ]
+    )
 
 
 class WindowTitleConfig(BaseModel):
