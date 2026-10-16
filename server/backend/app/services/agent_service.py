@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 # 직전 보고로부터 이만큼(초)을 넘는 간격은 오프라인 공백으로 보고 시간 누적에서 제외한다.
 MAX_REPORT_GAP_SECONDS = 10
 
+# 차단 사이트 통계 키(BlockedSiteDailyStat.url_pattern)의 최대 길이. 넘는 키는 저장 오류로 보고 전체가 실패하므로 건너뛴다.
+SITE_KEY_MAX_LENGTH = 256
+
 # ─── 현재 탐지 목록 (메모리 보관) ─────────────────────────────────
 # 에이전트가 매 보고마다 보내는 "지금 탐지 중인 항목"의 최신값.
 # 매초 바뀌는 휘발성 상태라 DB에 쌓지 않고 메모리에만 둔다
@@ -275,7 +278,7 @@ def _open_blocked_sites(req: StatusReportRequest) -> dict[str, bool]:
             site = _blocked_alert_site(None, item.target)
         else:
             site = None
-        if site is not None:
+        if site is not None and len(site) <= SITE_KEY_MAX_LENGTH:
             sites[site] = sites.get(site, False) or bool(item.is_foreground)
     return sites
 

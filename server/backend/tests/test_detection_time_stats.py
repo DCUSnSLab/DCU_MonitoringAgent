@@ -69,6 +69,14 @@ async def test_title_detection_mapped_to_site(db):
     assert 3 <= rows["gemini.google.com"].active_seconds <= 7
 
 
+async def test_title_detection_behind_is_background(db):
+    """창 제목으로 탐지한 창이 뒤에 있으면 백그라운드 (예: 주소창을 읽지 않는 Firefox)"""
+    await add_agent(db)
+    rows = await accumulate(db, report([detection("Google Gemini — Mozilla Firefox", source="title")]))
+    assert rows["gemini.google.com"].active_seconds == 0
+    assert 3 <= rows["gemini.google.com"].background_seconds <= 7
+
+
 async def test_unknown_title_ignored(db):
     """사이트를 정할 수 없는 창 제목은 누적하지 않음"""
     await add_agent(db)
@@ -110,6 +118,43 @@ async def test_cdp_tab_and_detection_same_site_counted_once(db):
     assert row.background_seconds == 0
 
 
+async def test_cdp_active_tab_and_background_detection(db):
+    """같은 사이트에서 CDP 탭이 활성이면 탐지 항목이 백그라운드여도 활성 (탐지가 CDP 값을 덮어쓰지 않음)"""
+    await add_agent(db)
+    rows = await accumulate(db, report(
+        detections=[detection("chatgpt.com/c/2")],
+        tabs=[("https://chatgpt.com/c/1", True)],
+    ))
+    row = rows["chatgpt.com"]
+    assert 3 <= row.active_seconds <= 7
+    assert row.background_seconds == 0
+
+
+async def test_cdp_only_site_still_counted_with_detections(db):
+    """현재 탐지 목록이 있어도 CDP 탭에만 있는 사이트는 계속 누적 (두 출처의 합집합)"""
+    await add_agent(db)
+    rows = await accumulate(db, report(
+        detections=[detection("gemini.google.com/app")],
+        tabs=[("https://chatgpt.com/c/1", True)],
+    ))
+    assert set(rows) == {"chatgpt.com", "gemini.google.com"}
+    assert 3 <= rows["chatgpt.com"].active_seconds <= 7
+    assert rows["gemini.google.com"].active_seconds == 0
+    assert 3 <= rows["gemini.google.com"].background_seconds <= 7
+
+
+async def test_several_cdp_tabs_same_site_any_active(db):
+    """같은 사이트의 CDP 탭 여러 개 중 하나라도 활성이면 활성 (뒤 탭 값이 덮어쓰지 않음)"""
+    await add_agent(db)
+    rows = await accumulate(db, report(tabs=[
+        ("https://chatgpt.com/c/1", True),
+        ("https://chatgpt.com/c/2", False),
+    ]))
+    row = rows["chatgpt.com"]
+    assert 3 <= row.active_seconds <= 7
+    assert row.background_seconds == 0
+
+
 async def test_cdp_background_tab_and_foreground_window(db):
     """CDP 탭은 뒤에 있지만 다른 브라우저 창(주소창 탐지)이 화면 앞이면 활성으로 한 번만"""
     await add_agent(db)
@@ -140,6 +185,29 @@ async def test_report_without_detections_keeps_cdp_only(db):
     assert await accumulate(db, report()) == {}
     rows = await accumulate(db, report(tabs=[("https://chatgpt.com/c/1", False)]))
     assert set(rows) == {"chatgpt.com"}
+
+
+async def test_empty_detections_keeps_cdp_tabs(db):
+    """탐지 목록이 빈 보고(지금 탐지된 것 없음)도 CDP 탭은 그대로 누적"""
+    await add_agent(db)
+    rows = await accumulate(db, report(detections=[], tabs=[("https://chatgpt.com/c/1", False)]))
+    assert set(rows) == {"chatgpt.com"}
+    assert 3 <= rows["chatgpt.com"].background_seconds <= 7
+
+
+async def test_unknown_source_ignored(db):
+    """출처가 url/title이 아닌 BLOCKED_URL 항목은 사이트를 정할 수 없으므로 제외"""
+    await add_agent(db)
+    rows = await accumulate(db, report([detection("chatgpt.com/c/1", source="", fg=True)]))
+    assert rows == {}
+
+
+async def test_too_long_site_key_skipped(db):
+    """DB 컬럼보다 긴 사이트 키는 건너뜀 (저장 오류로 보고 전체가 실패하지 않도록)"""
+    await add_agent(db)
+    long_host = "x" * 300 + ".com/a"
+    rows = await accumulate(db, report([detection(long_host), detection("claude.ai/new")]))
+    assert set(rows) == {"claude.ai"}
 
 
 async def test_detection_first_report_records_access_without_time(db):
