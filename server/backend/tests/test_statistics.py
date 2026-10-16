@@ -279,6 +279,29 @@ async def test_accumulate_clamps_large_gap(db):
     assert row.active_seconds == agent_service.MAX_REPORT_GAP_SECONDS
 
 
+async def _accumulate_gaps(db, gaps, active):
+    """같은 에이전트·사이트로 보고 간격 gaps(초)를 차례로 누적하고 최종 행을 반환."""
+    req = report_with_tabs("a1", [("https://chatgpt.com/x", active)])
+    for gap in gaps:
+        prev = datetime.now(timezone.utc) - timedelta(seconds=gap)
+        await agent_service.accumulate_blocked_site_stats(db, req, prev)
+    return (await db.execute(select(BlockedSiteDailyStat))).scalars().one()
+
+
+async def test_accumulate_carries_fraction_for_steady_gap(db):
+    """간격이 일정해도(3.4초 × 4 = 13.6초) 소수부를 넘겨 13초 누적 (버림·반올림이면 12초)"""
+    await add_agent(db, "a1", "a1", lab="501")
+    row = await _accumulate_gaps(db, [3.4] * 4, active=True)
+    assert row.active_seconds == 13
+
+
+async def test_accumulate_sub_second_gaps_not_lost(db):
+    """1초 미만 간격(빠른 PC, 0.7초 × 3 = 2.1초)도 버려지지 않고 2초 누적 (버림이면 0초)"""
+    await add_agent(db, "a1", "a1", lab="501")
+    row = await _accumulate_gaps(db, [0.7] * 3, active=False)
+    assert row.background_seconds == 2
+
+
 async def test_accumulate_first_report_no_delta(db):
     """첫 보고(prev_last_seen=None)는 시간 누적 0, 단 접근 시각은 기록."""
     await add_agent(db, "a1", "a1", lab="501")

@@ -29,6 +29,9 @@ MAX_REPORT_GAP_SECONDS = 10
 # 차단 사이트 통계 키(BlockedSiteDailyStat.url_pattern)의 최대 길이. 넘는 키는 저장 오류로 보고 전체가 실패하므로 건너뛴다.
 SITE_KEY_MAX_LENGTH = 256
 
+# 차단 사이트 시간 누적에서 정수 초로 저장하고 남은 소수부 (에이전트별, 메모리 보관 — 재시작 시 최대 1초 손실)
+_gap_carry: dict[str, float] = {}
+
 # ─── 현재 탐지 목록 (메모리 보관) ─────────────────────────────────
 # 에이전트가 매 보고마다 보내는 "지금 탐지 중인 항목"의 최신값.
 # 매초 바뀌는 휘발성 상태라 DB에 쌓지 않고 메모리에만 둔다
@@ -300,12 +303,16 @@ async def accumulate_blocked_site_stats(
     now = datetime.now(timezone.utc)
 
     # 직전 보고로부터 경과 시간(초). 첫 보고/큰 공백은 누적에서 제외.
+    # 컬럼이 정수(초)라 보고마다 소수부를 버리면 간격이 일정할 때(예: 3.2초마다) 계속 손실되므로,
+    # 소수부는 에이전트별로 다음 보고에 넘겨 장기 누적 오차를 1초 미만으로 유지한다.
     delta = 0
     if prev_last_seen is not None:
         if prev_last_seen.tzinfo is None:
             prev_last_seen = prev_last_seen.replace(tzinfo=timezone.utc)
         gap = (now - prev_last_seen).total_seconds()
-        delta = int(max(0, min(gap, MAX_REPORT_GAP_SECONDS)))
+        span = max(0.0, min(gap, MAX_REPORT_GAP_SECONDS)) + _gap_carry.pop(req.agent_id, 0.0)
+        delta = int(span)
+        _gap_carry[req.agent_id] = span - delta
 
     today = now.date()
     for pat, is_active in matched.items():
