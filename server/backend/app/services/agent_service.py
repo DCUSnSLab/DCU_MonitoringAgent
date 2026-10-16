@@ -250,18 +250,48 @@ def _match_blocked_pattern(url: str) -> Optional[str]:
     return None
 
 
+def _open_blocked_sites(req: StatusReportRequest) -> dict[str, bool]:
+    """보고 시점에 열려 있던 차단 사이트 → 화면에 떠 있었는지(활성) 여부.
+
+    - CDP 탭: 설정된 차단 패턴과 일치하는 탭 (활성 탭이면 활성)
+    - 현재 탐지 목록의 차단 사이트(BLOCKED_URL): CDP 없는 PC에서 주소창·창 제목으로 탐지한 것
+      (화면 앞 창이면 활성). 사이트 키는 알림 집계(_blocked_alert_site)와 같게 맞춘다.
+    같은 사이트가 여러 곳에 있으면 한 번만 세고, 하나라도 활성이면 활성으로 본다.
+    """
+    sites: dict[str, bool] = {}
+    if settings.blocked_url_patterns:
+        for tab in req.browser_details.chrome.tabs:
+            pat = _match_blocked_pattern(tab.url)
+            if pat is not None:
+                sites[pat] = sites.get(pat, False) or bool(tab.is_active)
+
+    # 필드가 없는 보고(구버전 에이전트·오프라인 버퍼 재전송)는 CDP 탭만 본다
+    for item in req.active_detections or []:
+        if item.code != "BLOCKED_URL":
+            continue
+        if item.source == "url":
+            site = _blocked_site_key(item.target)
+        elif item.source == "title":
+            site = _blocked_alert_site(None, item.target)
+        else:
+            site = None
+        if site is not None:
+            sites[site] = sites.get(site, False) or bool(item.is_foreground)
+    return sites
+
+
 async def accumulate_blocked_site_stats(
     db: AsyncSession,
     req: StatusReportRequest,
     prev_last_seen: Optional[datetime],
 ) -> None:
-    """보고서에 열려 있던 차단 사이트 탭의 활성/백그라운드 시간을 일자별로 누적합니다.
+    """보고서에 열려 있던 차단 사이트의 활성/백그라운드 시간을 일자별로 누적합니다.
 
-    개별 탭은 DB에 저장하지 않으므로, 직전 보고 이후 경과한 시간(delta)을
-    현재 열려 있는 각 차단 탭의 활성 여부에 따라 누적한다.
+    개별 탭·창은 DB에 저장하지 않으므로, 직전 보고 이후 경과한 시간(delta)을
+    지금 열려 있는 각 차단 사이트의 활성 여부에 따라 누적한다 (대상은 _open_blocked_sites 참고).
     """
-    tabs = req.browser_details.chrome.tabs
-    if not tabs or not settings.blocked_url_patterns:
+    matched = _open_blocked_sites(req)
+    if not matched:
         return
 
     now = datetime.now(timezone.utc)
@@ -273,16 +303,6 @@ async def accumulate_blocked_site_stats(
             prev_last_seen = prev_last_seen.replace(tzinfo=timezone.utc)
         gap = (now - prev_last_seen).total_seconds()
         delta = int(max(0, min(gap, MAX_REPORT_GAP_SECONDS)))
-
-    # 패턴별로 활성 여부 집계 (같은 패턴이 여러 탭에 있으면 하나라도 활성이면 활성으로 간주)
-    matched: dict[str, bool] = {}
-    for tab in tabs:
-        pat = _match_blocked_pattern(tab.url)
-        if pat is not None:
-            matched[pat] = matched.get(pat, False) or bool(tab.is_active)
-
-    if not matched:
-        return
 
     today = now.date()
     for pat, is_active in matched.items():
