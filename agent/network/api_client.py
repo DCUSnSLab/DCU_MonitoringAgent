@@ -196,8 +196,10 @@ class ApiClient:
             os.makedirs(self._buffer_dir, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             filepath = os.path.join(self._buffer_dir, f"report_{timestamp}.json")
+            # 현재 탐지 목록은 보고 시점의 휘발성 상태라 저장하지 않는다.
+            # (나중에 재전송될 때 서버의 "현재 탐지 중"을 과거 값으로 덮어쓰지 않도록, 필드 자체를 뺀다)
             with open(filepath, "w", encoding="utf-8") as f:
-                json.dump(report.dict(), f, ensure_ascii=False, default=str)
+                json.dump(report.dict(exclude={"active_detections"}), f, ensure_ascii=False, default=str)
 
             # 버퍼 크기 제한 (오래된 파일 삭제)
             self._trim_buffer()

@@ -21,28 +21,43 @@ class StateAnalyzer:
         2. DANGER: 알림의 원인이 된 대상이 현재 화면에서 활성화된(Active) 상태인 경우
            - 차단된 프로세스가 현재 포그라운드(Foreground) 프로세스일 때
            - 차단된 URL이 크롬의 현재 포커스 탭(is_active=True)일 때
+           - 창 제목·주소창으로 탐지된 창이 현재 포그라운드 창일 때
         3. WARNING: 알림 목록이 존재하지만, 모두 백그라운드에 숨어있는 경우
         """
         if not current_alerts:
             return UserState.SAFE
 
-        # DANGER(경고) 조건 검사
-        for alert in current_alerts:
-            code = alert.code
-            
-            if code in ("UNAUTHORIZED_PROCESS", "BLOCKED_PROCESS"):
-                # 해당 프로세스가 포그라운드인지 검사
-                for proc in report.processes:
-                    if proc.name == alert.process_name and proc.is_foreground:
-                        return UserState.DANGER
-            
-            elif code == "BLOCKED_URL":
-                # 해당 URL이 크롬의 활성화된 탭인지 검사
-                chrome_info = report.browser_details.chrome
-                if chrome_info and chrome_info.tabs:
-                    for tab in chrome_info.tabs:
-                        if tab.url == alert.url and tab.is_active:
-                            return UserState.DANGER
+        # 알림 대상 중 하나라도 지금 화면에 띄워져 있으면 DANGER
+        if any(StateAnalyzer.is_on_screen(report, alert) for alert in current_alerts):
+            return UserState.DANGER
 
         # 알림이 있긴 하지만 아무것도 포그라운드에 노출되지 않았으므로 주의
         return UserState.WARNING
+
+    @staticmethod
+    def is_on_screen(report: StatusReport, alert: Alert) -> bool:
+        """알림 대상이 지금 화면에 띄워져 있는지 판정합니다.
+
+        알림 코드가 아니라 알림이 가리키는 대상(process_name / url / window_title)으로 판정하므로
+        BLOCKED_PROCESS/UNAUTHORIZED_PROCESS/MESSENGER_DETECTED(프로세스),
+        BLOCKED_URL/MESSENGER_DETECTED(URL·창 제목)를 모두 동일하게 처리한다.
+        """
+        # 프로세스 기반 알림: 해당 프로세스가 포그라운드인지
+        if alert.process_name:
+            for proc in report.processes:
+                if proc.name == alert.process_name and proc.is_foreground:
+                    return True
+
+        # URL 기반 알림: 해당 URL이 크롬의 활성화된 탭인지
+        if alert.url:
+            chrome_info = report.browser_details.chrome
+            if chrome_info and chrome_info.tabs:
+                for tab in chrome_info.tabs:
+                    if tab.url == alert.url and tab.is_active:
+                        return True
+
+        # 창 기반 알림(창 제목·주소창 URL): 탐지 시점에 그 창이 포그라운드였는지 (창 핸들로 판정한 값)
+        if alert.window_title and alert.window_is_foreground:
+            return True
+
+        return False

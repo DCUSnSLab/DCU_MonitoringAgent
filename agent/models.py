@@ -83,7 +83,23 @@ class Alert(BaseModel):
     message: str = ""
     process_name: Optional[str] = None
     url: Optional[str] = None
+    # 창 제목 기반 탐지 시 탐지된 창의 제목
+    window_title: Optional[str] = None
+    # 창 제목 기반 탐지 시 그 창이 탐지 시점의 포그라운드 창이었는지
+    window_is_foreground: bool = False
     detected_at: datetime = Field(default_factory=datetime.now)
+
+
+class ActiveDetection(BaseModel):
+    """지금 이 순간 탐지 중인 항목 1건 (대상별 중복 없음)
+
+    알림(alerts)은 1분 단위로 중복 제거돼 이력용으로만 쓰이므로,
+    "현재 무엇이 켜져 있는지"는 매 보고마다 이 목록으로 따로 전달한다.
+    """
+    code: str  # BLOCKED_PROCESS | UNAUTHORIZED_PROCESS | BLOCKED_URL | MESSENGER_DETECTED
+    target: str  # 프로세스명 / URL / 창 제목
+    source: str  # process | url | title
+    is_foreground: bool = False  # 지금 화면에 띄워져 있는지
 
 
 # ─── 상태 보고 모델 ──────────────────────────────────────────────
@@ -114,6 +130,7 @@ class StatusReport(BaseModel):
     processes: List[ProcessInfo] = Field(default_factory=list)
     browser_details: BrowserDetails = Field(default_factory=BrowserDetails)
     alerts: List[Alert] = Field(default_factory=list)
+    active_detections: List[ActiveDetection] = Field(default_factory=list)
     foreground_window: Optional[str] = None
 
 

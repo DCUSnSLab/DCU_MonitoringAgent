@@ -22,6 +22,10 @@ monitoring:
       - "kakaotalk.exe"
       - "telegram.exe"
       - "discord.exe"
+    always_blocked:                  # 모드와 무관하게 항상 차단으로 탐지 (AI 데스크톱 앱)
+      - "claude.exe"
+      - "chatgpt.exe"
+      - "chatgpt classic.exe"
 
   chrome:
     enabled: true
@@ -33,6 +37,49 @@ monitoring:
       - "chatgpt.com"
       - "bard.google.com"
       - "gemini.google.com"
+      - "claude.ai"
+
+  messenger:
+    enabled: true
+    process_names:
+      - "kakaotalk.exe"
+      - "telegram.exe"
+      - "discord.exe"
+    url_patterns:
+      - "instagram.com"
+      - "facebook.com"
+      - "messenger.com"
+      - "web.whatsapp.com"
+      - "web.telegram.org"
+      - "discord.com"
+
+  # 주소창 URL 읽기 (CDP 없이 크롬 계열 브라우저의 주소창을 읽어 blocked_urls·url_patterns 로 탐지)
+  address_bar:
+    enabled: true
+    browser_processes:
+      - "chrome.exe"
+      - "msedge.exe"
+      - "whale.exe"
+
+  # 창 제목 기반 탐지 (주소창을 읽지 못한 브라우저 창을 창 제목으로 탐지, 대소문자 무시·부분일치)
+  window_title:
+    enabled: true
+    browser_processes:
+      - "chrome.exe"
+      - "msedge.exe"
+      - "whale.exe"
+      - "firefox.exe"
+    messenger_keywords:
+      - "Instagram"
+      - "Facebook"
+      - "Messenger"
+      - "WhatsApp"
+      - "Telegram"
+      - "Discord"
+    blocked_keywords:
+      - "ChatGPT"
+      - "Gemini"
+      - "Claude"
 
 server:
   enabled: true

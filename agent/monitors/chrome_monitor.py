@@ -25,7 +25,7 @@ from urllib.error import URLError
 
 import psutil
 
-from agent.config import ChromeConfig
+from agent.config import ChromeConfig, MessengerConfig
 from agent.models import Alert, ChromeInfo, ChromeTabInfo
 from agent.utils.logger import get_logger
 
@@ -42,11 +42,16 @@ class ChromeMonitor:
 
     CHROME_PROCESS_NAMES = {"chrome.exe", "chromium.exe", "msedge.exe"}
 
-    def __init__(self, config: ChromeConfig):
+    def __init__(self, config: ChromeConfig, messenger: Optional[MessengerConfig] = None):
         self._config = config
         # localhost 대신 127.0.0.1을 사용하여 IPv6 DNS 해석 타임아웃(2초 지연)을 방지합니다.
         self._cdp_url = f"http://127.0.0.1:{config.debug_port}/json"
         self._last_tabs: List[ChromeTabInfo] = []
+        # 메신저 URL 부분일치 패턴(소문자)
+        self._messenger_patterns = (
+            [p.lower() for p in messenger.url_patterns]
+            if messenger and messenger.enabled else []
+        )
 
     # ─── 공개 메서드 ──────────────────────────────────────────────
 
@@ -76,6 +81,8 @@ class ChromeMonitor:
 
         # 차단 URL 검사
         alerts = self._check_blocked_urls(tabs)
+        # 메신저 URL 검사
+        alerts.extend(self._check_messenger_urls(tabs))
 
         chrome_info = ChromeInfo(
             is_running=True,
@@ -211,6 +218,27 @@ class ChromeMonitor:
                     )
                     alerts.append(alert)
                     logger.warning(f"차단 URL 감지: [{pattern}] {tab.url}")
+                    break  # 같은 탭 중복 알림 방지
+
+        return alerts
+
+    def _check_messenger_urls(self, tabs: List[ChromeTabInfo]) -> List[Alert]:
+        """
+        탭 URL을 메신저 패턴과 비교하여 알림을 생성합니다.
+        부분 일치 방식으로 검사합니다 (차단 URL과 별개 카테고리: MESSENGER_DETECTED).
+        """
+        alerts = []
+        for tab in tabs:
+            url_lower = tab.url.lower()
+            for pattern in self._messenger_patterns:
+                if pattern in url_lower:
+                    alerts.append(Alert(
+                        level="warning",
+                        code="MESSENGER_DETECTED",
+                        message=f"메신저 사이트 접근: {tab.url}",
+                        url=tab.url,
+                    ))
+                    logger.warning(f"메신저 URL 감지: [{pattern}] {tab.url}")
                     break  # 같은 탭 중복 알림 방지
 
         return alerts

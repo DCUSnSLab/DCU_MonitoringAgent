@@ -19,7 +19,17 @@ class Settings(BaseSettings):
         "chatgpt.com",
         "bard.google.com",
         "gemini.google.com",
+        "claude.ai",
     ]
+
+    # 에이전트가 창 제목으로 탐지한 차단 알림(URL 없음)을 통계에 넣을 때 쓰는 사이트 키.
+    # 알림 메시지(창 제목)에 키워드가 있으면 해당 사이트로 집계한다.
+    # 사이트 키는 위 blocked_url_patterns 와 같게 맞춰, URL 기반 알림과 한 행으로 합쳐지게 한다.
+    blocked_title_sites: dict[str, str] = {
+        "chatgpt": "chatgpt.com",
+        "gemini": "gemini.google.com",
+        "claude": "claude.ai",
+    }
 
     class Config:
         env_file = ".env"

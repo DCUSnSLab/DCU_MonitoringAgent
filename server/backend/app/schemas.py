@@ -58,6 +58,14 @@ class AlertSchema(BaseModel):
     detected_at: Optional[datetime] = None
 
 
+class ActiveDetectionSchema(BaseModel):
+    """에이전트가 지금 탐지 중인 항목 1건 (대상별 중복 없음)"""
+    code: str = ""  # BLOCKED_PROCESS | UNAUTHORIZED_PROCESS | BLOCKED_URL | MESSENGER_DETECTED
+    target: str = ""  # 프로세스명 / URL / 창 제목
+    source: str = ""  # process | url | title
+    is_foreground: bool = False  # 지금 화면에 띄워져 있는지
+
+
 class AgentRegisterRequest(BaseModel):
     agent_id: str
     hostname: str
@@ -78,6 +86,9 @@ class StatusReportRequest(BaseModel):
     processes: list[ProcessInfoSchema] = []
     browser_details: BrowserDetailsSchema = BrowserDetailsSchema()
     alerts: list[AlertSchema] = []
+    # 지금 탐지 중인 항목. 필드가 없으면(None) 현재 목록을 건드리지 않는다
+    # (구버전 에이전트, 오프라인 버퍼에서 재전송되는 과거 보고)
+    active_detections: Optional[list[ActiveDetectionSchema]] = None
     foreground_window: Optional[str] = None
 
 
@@ -116,6 +127,7 @@ class AgentDetail(AgentSummary):
     processes: list[ProcessInfoSchema] = []
     chrome_tabs: list[ChromeTabSchema] = []
     recent_alerts: list[AlertSchema] = []
+    active_detections: list[ActiveDetectionSchema] = []
     registered_at: Optional[datetime] = None
 
 

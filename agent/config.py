@@ -27,6 +27,11 @@ class ProcessConfig(BaseModel):
     mode: str = "all"  # all | whitelist | blacklist
     whitelist: List[str] = Field(default_factory=list)
     blacklist: List[str] = Field(default_factory=list)
+    # 프로세스 모드와 무관하게 항상 차단 프로그램으로 탐지할 목록 (AI 데스크톱 앱 등)
+    # 설정 키가 없는 기존 PC(OTA 갱신)에서도 동작하도록 기본값을 둔다.
+    always_blocked: List[str] = Field(
+        default_factory=lambda: ["claude.exe", "chatgpt.exe", "chatgpt classic.exe"]
+    )
 
 
 class ChromeConfig(BaseModel):
@@ -39,12 +44,72 @@ class ChromeConfig(BaseModel):
     user_data_dir: str = "C:\\chrome-debug"
 
 
+class MessengerConfig(BaseModel):
+    """메신저 탐지 설정 (프로세스 whitelist/blacklist/all 모드와 무관하게 항상 탐지)
+
+    배포 PC는 OTA 갱신 시 기존 설정 파일(APPDATA)을 그대로 쓰므로,
+    messenger 섹션이 없는 PC에서도 탐지되도록 기본값을 둔다.
+    """
+    enabled: bool = True
+    # 탐지할 메신저 프로세스명
+    process_names: List[str] = Field(
+        default_factory=lambda: ["kakaotalk.exe", "telegram.exe", "discord.exe"]
+    )
+    # 탐지할 메신저 URL 부분일치 패턴
+    url_patterns: List[str] = Field(
+        default_factory=lambda: [
+            "instagram.com", "facebook.com", "messenger.com",
+            "web.whatsapp.com", "web.telegram.org", "discord.com",
+        ]
+    )
+
+
+class AddressBarConfig(BaseModel):
+    """주소창 URL 읽기 설정
+
+    CDP 없이도 크롬 계열 브라우저 창의 주소창 글자를 UI Automation으로 읽어,
+    CDP와 같은 URL 목록(chrome.blocked_urls, messenger.url_patterns)으로 차단·메신저 사이트를 탐지한다.
+    주소창을 읽지 못한 창은 창 제목 탐지로 판정한다.
+    설정 파일에 섹션이 없어도(OTA로 갱신된 기존 PC) 동작하도록 기본값을 둔다.
+    """
+    enabled: bool = True
+    # 주소창을 읽을 브라우저 프로세스 (크로미움 계열만 지원)
+    browser_processes: List[str] = Field(
+        default_factory=lambda: ["chrome.exe", "msedge.exe", "whale.exe"]
+    )
+
+
+class WindowTitleConfig(BaseModel):
+    """창 제목 기반 탐지 설정
+
+    CDP 없이도 브라우저 창 제목(= 그 창에서 보고 있는 탭의 제목)으로 메신저·차단 사이트를 탐지한다.
+    오탐을 줄이기 위해 browser_processes 에 해당하는 브라우저 창만 검사한다.
+    설정 파일에 섹션이 없어도(OTA로 갱신된 기존 PC) 동작하도록 기본값을 둔다.
+    """
+    enabled: bool = True
+    # 검사 대상 브라우저 프로세스
+    browser_processes: List[str] = Field(
+        default_factory=lambda: ["chrome.exe", "msedge.exe", "whale.exe", "firefox.exe"]
+    )
+    # 창 제목에 포함되면 메신저로 판단할 키워드 (대소문자 무시, 부분일치)
+    messenger_keywords: List[str] = Field(
+        default_factory=lambda: ["Instagram", "Facebook", "Messenger", "WhatsApp", "Telegram", "Discord"]
+    )
+    # 창 제목에 포함되면 차단 사이트로 판단할 키워드 (대소문자 무시, 부분일치)
+    blocked_keywords: List[str] = Field(
+        default_factory=lambda: ["ChatGPT", "Gemini", "Claude"]
+    )
+
+
 class MonitoringConfig(BaseModel):
     """모니터링 통합 설정"""
     interval_seconds: int = 5
     track_foreground: bool = True
     process: ProcessConfig = Field(default_factory=ProcessConfig)
     chrome: ChromeConfig = Field(default_factory=ChromeConfig)
+    messenger: MessengerConfig = Field(default_factory=MessengerConfig)
+    address_bar: AddressBarConfig = Field(default_factory=AddressBarConfig)
+    window_title: WindowTitleConfig = Field(default_factory=WindowTitleConfig)
 
 
 class ServerConfig(BaseModel):
@@ -84,6 +149,18 @@ class AppConfig(BaseModel):
 
 
 # ─── 설정 관리 클래스 ────────────────────────────────────────────
+
+# OTA 갱신 시 번들 설정 값을 기준으로 맞출 탐지 정책 목록 (설정 경로)
+POLICY_LIST_PATHS = (
+    ("monitoring", "chrome", "blocked_urls"),
+    ("monitoring", "process", "always_blocked"),
+    ("monitoring", "messenger", "process_names"),
+    ("monitoring", "messenger", "url_patterns"),
+    ("monitoring", "address_bar", "browser_processes"),
+    ("monitoring", "window_title", "browser_processes"),
+    ("monitoring", "window_title", "messenger_keywords"),
+    ("monitoring", "window_title", "blocked_keywords"),
+)
 
 
 class ConfigManager:
@@ -167,7 +244,11 @@ class ConfigManager:
                     if builtin_ws_url and self._config.server.ws_url != builtin_ws_url:
                         self._config.server.ws_url = builtin_ws_url
                         need_save = True
-                        
+
+                    # 3. 탐지 정책 목록 갱신 (OTA로 추가·변경된 탐지 대상이 기존 PC에도 반영되도록)
+                    if self._sync_policy_lists(builtin_raw):
+                        need_save = True
+
                     # 덮어쓴 최신 설정을 로컬 %APPDATA% 파일에도 바로 반영 (업데이트 동기화)
                     if need_save and getattr(self, "_config_path", None):
                         # agent_id 생성 전에 save()를 호출하면 id가 빈 값으로 저장될 수 있으므로
@@ -186,6 +267,27 @@ class ConfigManager:
             self._config.agent.id = self._generate_agent_id()
 
         return self._config
+
+    def _sync_policy_lists(self, builtin_raw: dict) -> bool:
+        """번들 설정에 있는 탐지 정책 목록으로 현재 설정을 덮어씁니다. 바뀐 항목이 있으면 True.
+
+        배포 PC는 OTA 갱신 후에도 기존 APPDATA 설정 파일을 계속 쓰므로,
+        버전·서버 주소와 마찬가지로 탐지 대상 목록도 번들 값을 기준으로 맞춘다.
+        """
+        changed = False
+        for path in POLICY_LIST_PATHS:
+            value = builtin_raw
+            for key in path:
+                value = value.get(key) if isinstance(value, dict) else None
+            if not isinstance(value, list):
+                continue
+            target = self._config
+            for key in path[:-1]:
+                target = getattr(target, key)
+            if getattr(target, path[-1]) != value:
+                setattr(target, path[-1], list(value))
+                changed = True
+        return changed
 
     def save(self) -> None:
         """현재 설정을 파일에 저장합니다."""

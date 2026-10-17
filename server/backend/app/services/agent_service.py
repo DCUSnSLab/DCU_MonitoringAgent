@@ -13,12 +13,55 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import Agent, AlertLogDB, BlockedSiteDailyStat, StatusReportDB
-from app.schemas import AgentRegisterRequest, AgentSummary, DashboardSummary, StatusReportRequest
+from app.schemas import (
+    ActiveDetectionSchema,
+    AgentRegisterRequest,
+    AgentSummary,
+    DashboardSummary,
+    StatusReportRequest,
+)
 
 logger = logging.getLogger(__name__)
 
 # 직전 보고로부터 이만큼(초)을 넘는 간격은 오프라인 공백으로 보고 시간 누적에서 제외한다.
 MAX_REPORT_GAP_SECONDS = 10
+
+# 차단 사이트 통계 키(BlockedSiteDailyStat.url_pattern)의 최대 길이. 넘는 키는 저장 오류로 보고 전체가 실패하므로 건너뛴다.
+SITE_KEY_MAX_LENGTH = 256
+
+# 차단 사이트 시간 누적에서 정수 초로 저장하고 남은 소수부 (에이전트별, 메모리 보관 — 재시작 시 최대 1초 손실)
+_gap_carry: dict[str, float] = {}
+
+# ─── 현재 탐지 목록 (메모리 보관) ─────────────────────────────────
+# 에이전트가 매 보고마다 보내는 "지금 탐지 중인 항목"의 최신값.
+# 매초 바뀌는 휘발성 상태라 DB에 쌓지 않고 메모리에만 둔다
+# (WebSocket 매니저와 같은 단일 백엔드 레플리카 전제). 이 시간 넘게 갱신이 없으면 비어 있는 것으로 본다.
+ACTIVE_DETECTIONS_MAX_AGE_SECONDS = 10
+_active_detections: dict[str, tuple[datetime, list[ActiveDetectionSchema]]] = {}
+
+
+def set_active_detections(agent_id: str, items: list[ActiveDetectionSchema]) -> None:
+    """에이전트의 현재 탐지 목록을 최신값으로 교체한다."""
+    _active_detections[agent_id] = (datetime.now(timezone.utc), list(items))
+
+
+def get_active_detections(
+    agent_id: str, now: Optional[datetime] = None
+) -> list[ActiveDetectionSchema]:
+    """에이전트의 현재 탐지 목록. 갱신이 오래됐거나(오프라인 등) 없으면 빈 목록."""
+    entry = _active_detections.get(agent_id)
+    if entry is None:
+        return []
+    updated_at, items = entry
+    now = now or datetime.now(timezone.utc)
+    if (now - updated_at).total_seconds() > ACTIVE_DETECTIONS_MAX_AGE_SECONDS:
+        return []
+    return items
+
+
+def clear_active_detections(agent_id: str) -> None:
+    """에이전트의 현재 탐지 목록을 비운다 (명시적 오프라인 등)."""
+    _active_detections.pop(agent_id, None)
 
 
 async def upsert_agent(db: AsyncSession, req: AgentRegisterRequest) -> Agent:
@@ -213,39 +256,63 @@ def _match_blocked_pattern(url: str) -> Optional[str]:
     return None
 
 
+def _open_blocked_sites(req: StatusReportRequest) -> dict[str, bool]:
+    """보고 시점에 열려 있던 차단 사이트 → 화면에 떠 있었는지(활성) 여부.
+
+    - CDP 탭: 설정된 차단 패턴과 일치하는 탭 (활성 탭이면 활성)
+    - 현재 탐지 목록의 차단 사이트(BLOCKED_URL): CDP 없는 PC에서 주소창·창 제목으로 탐지한 것
+      (화면 앞 창이면 활성). 사이트 키는 알림 집계(_blocked_alert_site)와 같게 맞춘다.
+    같은 사이트가 여러 곳에 있으면 한 번만 세고, 하나라도 활성이면 활성으로 본다.
+    """
+    sites: dict[str, bool] = {}
+    if settings.blocked_url_patterns:
+        for tab in req.browser_details.chrome.tabs:
+            pat = _match_blocked_pattern(tab.url)
+            if pat is not None:
+                sites[pat] = sites.get(pat, False) or bool(tab.is_active)
+
+    # 필드가 없는 보고(구버전 에이전트·오프라인 버퍼 재전송)는 CDP 탭만 본다
+    for item in req.active_detections or []:
+        if item.code != "BLOCKED_URL":
+            continue
+        if item.source == "url":
+            site = _blocked_site_key(item.target)
+        elif item.source == "title":
+            site = _blocked_alert_site(None, item.target)
+        else:
+            site = None
+        if site is not None and len(site) <= SITE_KEY_MAX_LENGTH:
+            sites[site] = sites.get(site, False) or bool(item.is_foreground)
+    return sites
+
+
 async def accumulate_blocked_site_stats(
     db: AsyncSession,
     req: StatusReportRequest,
     prev_last_seen: Optional[datetime],
 ) -> None:
-    """보고서에 열려 있던 차단 사이트 탭의 활성/백그라운드 시간을 일자별로 누적합니다.
+    """보고서에 열려 있던 차단 사이트의 활성/백그라운드 시간을 일자별로 누적합니다.
 
-    개별 탭은 DB에 저장하지 않으므로, 직전 보고 이후 경과한 시간(delta)을
-    현재 열려 있는 각 차단 탭의 활성 여부에 따라 누적한다.
+    개별 탭·창은 DB에 저장하지 않으므로, 직전 보고 이후 경과한 시간(delta)을
+    지금 열려 있는 각 차단 사이트의 활성 여부에 따라 누적한다 (대상은 _open_blocked_sites 참고).
     """
-    tabs = req.browser_details.chrome.tabs
-    if not tabs or not settings.blocked_url_patterns:
+    matched = _open_blocked_sites(req)
+    if not matched:
         return
 
     now = datetime.now(timezone.utc)
 
     # 직전 보고로부터 경과 시간(초). 첫 보고/큰 공백은 누적에서 제외.
+    # 컬럼이 정수(초)라 보고마다 소수부를 버리면 간격이 일정할 때(예: 3.2초마다) 계속 손실되므로,
+    # 소수부는 에이전트별로 다음 보고에 넘겨 장기 누적 오차를 1초 미만으로 유지한다.
     delta = 0
     if prev_last_seen is not None:
         if prev_last_seen.tzinfo is None:
             prev_last_seen = prev_last_seen.replace(tzinfo=timezone.utc)
         gap = (now - prev_last_seen).total_seconds()
-        delta = int(max(0, min(gap, MAX_REPORT_GAP_SECONDS)))
-
-    # 패턴별로 활성 여부 집계 (같은 패턴이 여러 탭에 있으면 하나라도 활성이면 활성으로 간주)
-    matched: dict[str, bool] = {}
-    for tab in tabs:
-        pat = _match_blocked_pattern(tab.url)
-        if pat is not None:
-            matched[pat] = matched.get(pat, False) or bool(tab.is_active)
-
-    if not matched:
-        return
+        span = max(0.0, min(gap, MAX_REPORT_GAP_SECONDS)) + _gap_carry.pop(req.agent_id, 0.0)
+        delta = int(span)
+        _gap_carry[req.agent_id] = span - delta
 
     today = now.date()
     for pat, is_active in matched.items():
@@ -359,6 +426,21 @@ def _blocked_site_key(url: str) -> Optional[str]:
     return host or None
 
 
+def _blocked_alert_site(url: Optional[str], message: Optional[str]) -> Optional[str]:
+    """차단 알림 한 건의 사이트 키.
+
+    URL이 있으면 URL로, 없으면(에이전트가 창 제목으로 탐지한 알림) 메시지에 담긴
+    창 제목의 사이트명(settings.blocked_title_sites)으로 판정한다. 판정할 수 없으면 None.
+    """
+    if url:
+        return _blocked_site_key(url)
+    text = (message or "").lower()
+    for keyword, site in settings.blocked_title_sites.items():
+        if keyword.lower() in text:
+            return site
+    return None
+
+
 async def get_blocked_site_stats(
     db: AsyncSession,
     lab: Optional[str] = None,
@@ -376,7 +458,7 @@ async def get_blocked_site_stats(
 
     # ── 1) alert_logs 기반 접근 이벤트 집계 (source of truth) ──
     ev_stmt = (
-        select(AlertLogDB.agent_id, AlertLogDB.url, AlertLogDB.detected_at)
+        select(AlertLogDB.agent_id, AlertLogDB.url, AlertLogDB.message, AlertLogDB.detected_at)
         .join(Agent, Agent.agent_id == AlertLogDB.agent_id, isouter=True)
         .where(AlertLogDB.code == "BLOCKED_URL")
     )
@@ -390,8 +472,8 @@ async def get_blocked_site_stats(
         ev_stmt = ev_stmt.where(AlertLogDB.detected_at < hi)
 
     merged: dict[tuple, dict] = {}
-    for aid, url, dt in (await db.execute(ev_stmt)).all():
-        key_site = _blocked_site_key(url or "")
+    for aid, url, message, dt in (await db.execute(ev_stmt)).all():
+        key_site = _blocked_alert_site(url, message)
         if key_site is None:
             continue
         key = (aid, key_site)
@@ -526,7 +608,7 @@ async def get_blocked_site_detail(
     first_at = None
     last_at = None
     for detected_at, level, url, message in (await db.execute(log_stmt)).all():
-        if _blocked_site_key(url or "") != site:
+        if _blocked_alert_site(url, message) != site:
             continue
         if detected_at is not None and detected_at.tzinfo is None:
             detected_at = detected_at.replace(tzinfo=timezone.utc)
@@ -614,9 +696,12 @@ async def get_blocked_access_timeline(
     date_to: Optional[date] = None,
     agent_id: Optional[str] = None,
 ) -> dict:
-    """차단 사이트 접근(BLOCKED_URL 알림)의 시간대별/일자별 분포를 반환합니다."""
+    """차단 사이트 접근(BLOCKED_URL 알림)의 시간대별/일자별 분포를 반환합니다.
+
+    사이트 통계 표와 합계가 맞도록, 사이트를 판정할 수 없는 알림은 제외한다.
+    """
     base = (
-        select(AlertLogDB.detected_at)
+        select(AlertLogDB.detected_at, AlertLogDB.url, AlertLogDB.message)
         .join(Agent, Agent.agent_id == AlertLogDB.agent_id, isouter=True)
         .where(AlertLogDB.code == "BLOCKED_URL")
     )
@@ -631,7 +716,10 @@ async def get_blocked_access_timeline(
         base = base.where(AlertLogDB.detected_at < hi)
 
     result = await db.execute(base)
-    detected_list = [r[0] for r in result.all()]
+    detected_list = [
+        dt for dt, url, message in result.all()
+        if _blocked_alert_site(url, message) is not None
+    ]
 
     # 시간대(0~23) 히스토그램
     hourly = {h: 0 for h in range(24)}
