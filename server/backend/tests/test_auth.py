@@ -155,14 +155,12 @@ def fail(lockout: LoginLockout, times: int, now: float, key: str = "ip") -> floa
 def test_lockout_after_ten_failures():
     lockout = LoginLockout(max_failures=10, lock_minutes=(1, 5, 30, 60, 120), reset_seconds=86400)
     assert fail(lockout, 9, 0.0) == 0
-    assert lockout.remaining_attempts("ip", 0.0) == 1
     assert lockout.locked_seconds("ip", 0.0) == 0
 
     assert fail(lockout, 1, 0.0) == 60  # 10번째 실패에서 1분 잠금
     assert lockout.locked_seconds("ip", 30.0) == 30
     assert lockout.locked_seconds("ip", 60.0) == 0  # 풀림
-    assert lockout.remaining_attempts("ip", 60.0) == 10  # 풀리면 다시 10번 실패해야 다음 단계
-    assert fail(lockout, 9, 60.0) == 0
+    assert fail(lockout, 9, 60.0) == 0  # 풀리면 다시 10번 실패해야 다음 단계
     assert fail(lockout, 1, 60.0) == 300  # 다음 단계 5분
 
 
@@ -242,11 +240,11 @@ async def test_agent_and_ota_endpoints_unaffected(client):
     assert r.status_code == 200
 
 
-async def test_wrong_password_counts_down_then_locks(client):
-    for i in range(9):
+async def test_wrong_password_then_locks(client):
+    for _ in range(9):
         r = await client.post("/api/auth/login", json={"username": "admin", "password": "wrong"})
         assert r.status_code == 401
-        assert f"남은 시도 {9 - i}회" in r.json()["detail"]
+        assert r.json()["detail"] == "아이디 또는 비밀번호가 올바르지 않습니다"  # 남은 시도 횟수는 알려 주지 않음
 
     r = await client.post("/api/auth/login", json={"username": "admin", "password": "wrong"})
     assert r.status_code == 429
@@ -262,8 +260,10 @@ async def test_successful_login_resets_failures(client):
     for _ in range(5):
         await client.post("/api/auth/login", json={"username": "admin", "password": "wrong"})
     assert (await client.post("/api/auth/login", json={"username": "admin", "password": PASSWORD})).status_code == 200
-    r = await client.post("/api/auth/login", json={"username": "admin", "password": "wrong"})
-    assert "남은 시도 9회" in r.json()["detail"]
+    # 성공으로 실패 횟수가 초기화돼, 다시 9번 틀려도 잠기지 않음 (초기화가 안 됐으면 5번째에 잠김)
+    for _ in range(9):
+        r = await client.post("/api/auth/login", json={"username": "admin", "password": "wrong"})
+        assert r.status_code == 401
 
 
 async def login_request(client, password, device_token=None):
@@ -294,8 +294,9 @@ async def test_trusted_device_failures_counted_per_device(client):
         r = await login_request(client, "wrong", device_token)
     assert r.status_code == 429  # 신뢰 기기도 10번 틀리면 그 기기는 잠김
     assert (await login_request(client, PASSWORD, device_token)).status_code == 429
-    r = await login_request(client, "wrong")  # 다른 곳의 실패 횟수와는 별개
-    assert "남은 시도 9회" in r.json()["detail"]
+    # 다른 곳(신뢰 기기 아님)의 실패 횟수와는 별개 → 9번까지는 잠기지 않음
+    for _ in range(9):
+        assert (await login_request(client, "wrong")).status_code == 401
 
 
 async def test_login_unavailable_without_configured_password(client, monkeypatch):

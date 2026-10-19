@@ -88,8 +88,8 @@ async def login(req: LoginRequest, request: Request):
         if lock_seconds > 0:
             logger.warning(f"대시보드 로그인 연속 실패로 잠금: {key} ({int(lock_seconds // 60)}분)")
             return _locked_response(lock_seconds)
-        remaining = login_lockout.remaining_attempts(key)
-        raise _unauthorized(f"아이디 또는 비밀번호가 올바르지 않습니다 (잠기기 전 남은 시도 {remaining}회)")
+        # 남은 시도 횟수는 알려 주지 않는다
+        raise _unauthorized("아이디 또는 비밀번호가 올바르지 않습니다")
 
     login_lockout.record_success(key)
     token, expires_at = auth_service.issue_token(req.username)

@@ -195,12 +195,6 @@ class LoginLockout:
         state = self._get(key, now)
         return max(0.0, state.locked_until - now) if state else 0.0
 
-    def remaining_attempts(self, key: str, now: Optional[float] = None) -> int:
-        """잠기기 전까지 남은 실패 허용 횟수."""
-        now = time.monotonic() if now is None else now
-        state = self._get(key, now)
-        return self.max_failures - (state.failures if state else 0)
-
     def record_failure(self, key: str, now: Optional[float] = None) -> float:
         """실패 1회 기록. 이번 실패로 잠기면 잠금 시간(초), 아니면 0."""
         now = time.monotonic() if now is None else now
