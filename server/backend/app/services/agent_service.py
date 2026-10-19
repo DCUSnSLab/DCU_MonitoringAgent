@@ -70,7 +70,7 @@ def clear_active_detections(agent_id: str) -> None:
 # DANGER(차단 대상이 화면 맨 앞)는 학생이 잠깐 띄웠다 내리면 수집 주기 하나만 잡혀 대시보드에서 놓치기 쉽다.
 # 마지막 DANGER 보고 후 settings.danger_hold_seconds 동안 DANGER와 그 이유를 유지하고,
 # 차단 대상이 화면 앞으로 나온 순간은 빨간 '화면 표시' 알림(level=danger)으로 남긴다.
-# 현재 탐지 목록과 같은 이유로 메모리에만 둔다 (재시작 시 유지 중인 DANGER 10초 정도만 사라짐).
+# 현재 탐지 목록과 같은 이유로 메모리에만 둔다 (서버 재시작 시 유지 중이던 DANGER 표시만 사라짐).
 ON_SCREEN_ALERT_CODE = "ON_SCREEN"
 # 창 제목 앞의 알림 개수 표시 "(3) " — 수시로 바뀌므로 같은 창 판정에서 뗀다 (에이전트와 같은 규칙)
 _NOTIFICATION_PREFIX = re.compile(r"^\(\d+\+?\)\s*")
