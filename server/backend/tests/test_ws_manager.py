@@ -10,6 +10,8 @@ import json
 
 import pytest
 
+from app.routers import agents
+from app.schemas import AgentOfflineRequest, AgentRegisterRequest
 from app.services import ws_manager as ws_module
 from app.services.ws_manager import WSManager, _coalesce_key, _merge
 
@@ -185,3 +187,18 @@ def test_summary_request_taken_once():
     manager.request_summary()
     assert manager.take_summary_request() is True
     assert manager.take_summary_request() is False
+
+
+# ─── 보고 처리 경로 ─────────────────────────────────────────────
+
+async def test_register_and_offline_notify_after_commit(db, monkeypatch):
+    """등록·오프라인 처리는 저장을 확정한 뒤 대시보드에 알림 (요약은 다른 DB 세션에서 계산하므로 확정 전이면 이전 상태로 셈)"""
+    calls = []
+    monkeypatch.setattr(agents.ws_manager, "publish", lambda t, d: calls.append((t, db.in_transaction())))
+    monkeypatch.setattr(agents.ws_manager, "request_summary", lambda: calls.append(("summary", db.in_transaction())))
+
+    await agents.register_agent(AgentRegisterRequest(agent_id="A", hostname="PC-1"), db)
+    await agents.receive_offline(AgentOfflineRequest(agent_id="A"), db)
+
+    # in_transaction()=False: 확정(commit)이 끝나 아직 확정되지 않은 변경이 없음
+    assert calls == [("agent_online", False), ("summary", False), ("agent_offline", False), ("summary", False)]

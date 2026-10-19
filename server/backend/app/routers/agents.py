@@ -47,6 +47,8 @@ async def register_agent(
     agent = await agent_service.upsert_agent(db, req)
     # 대시보드에 신규 에이전트 알림
     summary = await agent_service.get_agent_summary(db, req.agent_id)
+    # 저장을 확정한 뒤 대시보드에 알린다 (요약은 다른 DB 세션에서 계산하므로 확정 전이면 이전 상태로 셈)
+    await db.commit()
     if summary:
         # 대시보드 전송은 대기열에 넣고 바로 진행 (네트워크를 기다리며 DB 연결을 쥐지 않음)
         ws_manager.publish("agent_online", summary.model_dump(mode="json"))
@@ -176,6 +178,8 @@ async def receive_offline(
     agent_service.clear_danger_state(req.agent_id)
 
     agent = await agent_service.get_agent_summary(db, req.agent_id)
+    # 오프라인 저장을 확정한 뒤 대시보드에 알린다 (요약은 다른 DB 세션에서 계산)
+    await db.commit()
     if agent:
         ws_manager.publish("agent_offline", {
             "agent_id": agent.agent_id,
