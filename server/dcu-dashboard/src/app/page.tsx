@@ -6,12 +6,33 @@ import AgentCard from '@/components/AgentCard';
 import AgentModal from '@/components/AgentModal';
 import Header from '@/components/Header';
 
-type SortOrder = 'asc' | 'desc';
+type SortOption = 'name-asc' | 'name-desc' | 'seat-asc' | 'seat-desc';
 
 /** 숫자는 숫자로 비교하는 이름 정렬 (D2-535-2 < D2-535-10) */
 const naturalCompare = (a: string, b: string) => a.localeCompare(b, 'ko', { numeric: true, sensitivity: 'base' });
 const compareHostname = (a: AgentSummary, b: AgentSummary) =>
   naturalCompare(a.hostname, b.hostname) || a.agent_id.localeCompare(b.agent_id);
+
+/** 호실 뒤 자리 번호 (D2-535-21 → 21, D2_520_04 → 4). 호실은 서버와 같이 이름의 두 번째 부분. 없으면 NaN */
+function seatNumber(hostname: string): number {
+  const seat = hostname.split(/[-_]/)[2]?.match(/^\d+/);
+  return seat ? Number(seat[0]) : NaN;
+}
+
+/** PC 목록 정렬. 자리 번호 정렬에서 번호가 없는 PC(DESKTOP-… 등)는 방향과 관계없이 맨 뒤 */
+function sortAgents(list: AgentSummary[], option: SortOption): AgentSummary[] {
+  const [key, dir] = option.split('-');
+  const sign = dir === 'asc' ? 1 : -1;
+  return list.sort((a, b) => {
+    if (key === 'seat') {
+      const sa = seatNumber(a.hostname);
+      const sb = seatNumber(b.hostname);
+      if (Number.isNaN(sa) !== Number.isNaN(sb)) return Number.isNaN(sa) ? 1 : -1;
+      if (!Number.isNaN(sa) && sa !== sb) return sign * (sa - sb);
+    }
+    return sign * compareHostname(a, b);
+  });
+}
 
 const alertTime = (a: AlertInfo) => (a.detected_at ? new Date(a.detected_at).getTime() : 0);
 const alertKey = (a: AlertInfo) => `${a.code}|${a.message}|${alertTime(a)}`;
@@ -30,7 +51,7 @@ export default function DashboardPage() {
   const [selected, setSelected]       = useState<AgentDetail | null>(null);
   const [selectedLab, setSelectedLab] = useState<string>('전체');
   const [onlineOnly, setOnlineOnly]   = useState<boolean>(false);
-  const [sortOrder, setSortOrder]     = useState<SortOrder>('asc');
+  const [sortOption, setSortOption]   = useState<SortOption>('name-asc');
   const [wsStatus, setWsStatus]       = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -130,11 +151,13 @@ export default function DashboardPage() {
   /* ── 렌더링 ── */
   /* ── 데이터 필터링 (강의실 기준) ── */
   const labs = ['전체', ...Array.from(new Set(agents.map((a) => a.lab_name || '기타'))).sort(naturalCompare)];
-  // PC 이름순 정렬 (경고·주의 영역과 강의실별 목록 모두 같은 순서)
-  const filteredAgents = agents
-    .filter((a) => selectedLab === '전체' || (a.lab_name || '기타') === selectedLab)
-    .filter((a) => !onlineOnly || a.is_online)
-    .sort((a, b) => (sortOrder === 'asc' ? 1 : -1) * compareHostname(a, b));
+  // PC 이름·자리 번호순 정렬 (경고·주의 영역과 강의실별 목록 모두 같은 순서)
+  const filteredAgents = sortAgents(
+    agents
+      .filter((a) => selectedLab === '전체' || (a.lab_name || '기타') === selectedLab)
+      .filter((a) => !onlineOnly || a.is_online),
+    sortOption,
+  );
 
   const filteredAgentIds = new Set(filteredAgents.map((a) => a.agent_id));
   const filteredAlerts = selectedLab === '전체'
@@ -200,8 +223,8 @@ export default function DashboardPage() {
         </label>
 
         <select
-          value={sortOrder}
-          onChange={(e) => setSortOrder(e.target.value as SortOrder)}
+          value={sortOption}
+          onChange={(e) => setSortOption(e.target.value as SortOption)}
           aria-label="PC 정렬 순서"
           style={{
             padding: '8px 12px',
@@ -215,8 +238,10 @@ export default function DashboardPage() {
             outline: 'none',
           }}
         >
-          <option value="asc">PC 이름 ▲ 오름차순</option>
-          <option value="desc">PC 이름 ▼ 내림차순</option>
+          <option value="name-asc">PC 이름 ▲ 오름차순</option>
+          <option value="name-desc">PC 이름 ▼ 내림차순</option>
+          <option value="seat-asc">자리 번호 ▲ 오름차순</option>
+          <option value="seat-desc">자리 번호 ▼ 내림차순</option>
         </select>
       </div>
 
