@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Agent, AlertLogDB, StatusReportDB
+from app.routers.auth import require_dashboard_user
 from app.schemas import (
     AgentDetail,
     AgentSummary,
@@ -27,7 +28,8 @@ from app.services import agent_service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/dashboard")
+# 관리자 로그인 토큰이 있어야 조회 가능
+router = APIRouter(prefix="/api/dashboard", dependencies=[Depends(require_dashboard_user)])
 
 
 @router.get("/summary", response_model=DashboardSummary)

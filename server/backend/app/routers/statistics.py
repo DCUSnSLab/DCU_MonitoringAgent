@@ -15,10 +15,12 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.routers.auth import require_dashboard_user
 from app.schemas import BlockedAccessTimeline, BlockedSiteDetail, BlockedSiteStatRow
 from app.services import agent_service
 
-router = APIRouter(prefix="/api/statistics")
+# 관리자 로그인 토큰이 있어야 조회 가능
+router = APIRouter(prefix="/api/statistics", dependencies=[Depends(require_dashboard_user)])
 
 
 @router.get("/labs", response_model=list[str])

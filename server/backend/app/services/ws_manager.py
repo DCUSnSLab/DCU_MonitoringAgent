@@ -110,9 +110,9 @@ class WSManager:
         self._closing: set[asyncio.Task] = set()  # 종료 신호 태스크 (끝나기 전에 사라지지 않도록 참조 유지)
         self._summary_requested = False
 
-    async def connect(self, websocket: WebSocket):
+    async def connect(self, websocket: WebSocket, subprotocol: Optional[str] = None):
         """신규 대시보드 연결 수락 (연결 확인 메시지도 대기열로 보낸다)."""
-        await websocket.accept()
+        await websocket.accept(subprotocol=subprotocol)
         client = _DashboardClient(websocket, self)
         self._clients[websocket] = client
         client.enqueue("connected", {"message": "대시보드 연결됨"})

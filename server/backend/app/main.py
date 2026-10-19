@@ -10,7 +10,7 @@ from sqlalchemy import select, update
 from app.config import settings
 from app.database import Base, AsyncSessionLocal, engine
 from app.models import Agent
-from app.routers import agents, dashboard, ws, ota, statistics
+from app.routers import agents, auth, dashboard, ws, ota, statistics
 from app.services import agent_service
 from app.services.ws_manager import ws_manager
 
@@ -150,6 +150,7 @@ app.add_middleware(
 
 # 라우터 등록
 app.include_router(agents.router)
+app.include_router(auth.router)
 app.include_router(dashboard.router)
 app.include_router(ws.router)
 app.include_router(ota.router)
