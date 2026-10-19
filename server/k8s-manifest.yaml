@@ -162,8 +162,13 @@ spec:
             - configMapRef:
                 name: dcu-config
             # 대시보드 관리자 로그인 비밀번호·토큰 서명값 (공개 저장소라 값은 여기 두지 않고 클러스터에서 직접 만든다)
-            #   kubectl -n dcu-agent-monitor create secret generic dcu-dashboard-auth             #     --from-literal=DASHBOARD_ADMIN_PASSWORD='<비밀번호>'             #     --from-literal=DASHBOARD_TOKEN_SECRET="$(openssl rand -hex 32)"
+            #   kubectl -n dcu-agent-monitor create secret generic dcu-dashboard-auth \
+            #     --from-literal=DASHBOARD_ADMIN_PASSWORD='<비밀번호>' \
+            #     --from-literal=DASHBOARD_TOKEN_SECRET="$(openssl rand -hex 32)"
+            #   확인(값은 안 보이고 키 이름만): kubectl -n dcu-agent-monitor describe secret dcu-dashboard-auth
             # Secret 이 없으면 백엔드는 정상 기동하지만 대시보드에 로그인할 수 없다.
+            # 주의: Jenkins 는 이 파일이 아니라 Jenkins 서버의 /services/dcuclassagent/k8s-manifest.yaml 을 apply 한다.
+            #       아래 secretRef 를 그 파일에도 똑같이 넣어야 배포 후에도 유지된다.
             - secretRef:
                 name: dcu-dashboard-auth
                 optional: true
