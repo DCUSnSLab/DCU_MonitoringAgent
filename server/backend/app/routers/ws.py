@@ -18,10 +18,9 @@ router = APIRouter()
 @router.websocket("/ws/dashboard")
 async def dashboard_ws(websocket: WebSocket):
     """관리자 대시보드 실시간 업데이트 WebSocket"""
+    # 연결 확인 메시지는 이 대시보드의 전송 대기열로 보낸다 (ws_manager.connect)
     await ws_manager.connect(websocket)
     try:
-        # 초기 연결 확인 메시지 전송
-        await websocket.send_json({"type": "connected", "data": {"message": "대시보드 연결됨"}})
         # 연결 유지 (클라이언트가 끊을 때까지 대기)
         while True:
             # ping/pong 유지 (클라이언트 메시지 수신 대기)

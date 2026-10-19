@@ -1,0 +1,288 @@
+"""대시보드 전송 관리자 테스트 (GEN-1149).
+
+보고 처리와 대시보드 전송을 분리한 구조를 확인한다:
+publish 는 대기열에 넣고 바로 돌아오고, 대시보드별 전송 담당이 순서대로 보내며,
+전송에 실패한 대시보드만 정리한다. 같은 PC 갱신·요약은 대기열에서 합친다.
+"""
+import asyncio
+import inspect
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from app import main
+from app.routers import agents
+from app.schemas import AgentOfflineRequest, AgentRegisterRequest, StatusReportRequest
+from app.services import agent_service
+from app.services import ws_manager as ws_module
+from app.services.ws_manager import WSManager, _coalesce_key, _merge
+
+
+class FakeWebSocket:
+    """보낸 메시지를 기록하는 가짜 대시보드 연결.
+    fail=True면 보내기에서 오류, stall=True면 보내기·닫기가 끝나지 않음(데이터를 받아 가지 않는 대시보드)."""
+
+    def __init__(self, fail: bool = False, stall: bool = False):
+        self.sent: list[dict] = []
+        self.fail = fail
+        self.stall = stall
+        self.closed_with = None
+
+    async def accept(self):
+        pass
+
+    async def send_text(self, text: str):
+        if self.fail:
+            raise RuntimeError("connection closed")
+        if self.stall:
+            await asyncio.Event().wait()
+        self.sent.append(json.loads(text))
+
+    async def close(self, code: int = 1000):
+        if self.stall:
+            await asyncio.Event().wait()
+        self.closed_with = code
+
+
+async def settle():
+    """전송 담당 태스크가 대기열을 비울 시간을 준다 (메시지마다 이벤트 루프가 몇 바퀴 필요)."""
+    await asyncio.sleep(0.05)
+
+
+@pytest.fixture
+async def manager():
+    """테스트용 전송 관리자. 끝날 때 대시보드별 전송 태스크를 정리한다."""
+    m = WSManager()
+    yield m
+    tasks = [c.task for c in m._clients.values()] + list(m._closing)
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def types(ws: FakeWebSocket) -> list[str]:
+    return [m["type"] for m in ws.sent]
+
+
+# ─── 합치기 규칙 ─────────────────────────────────────────────────
+
+def test_coalesce_key():
+    assert _coalesce_key("agent_update", {"agent_id": "A"}) == "agent:A"
+    assert _coalesce_key("agent_offline", {"agent_id": "A"}) == "agent:A"
+    assert _coalesce_key("summary_update", {}) == "summary_update"
+    assert _coalesce_key("heartbeat", {}) == "heartbeat"
+    assert _coalesce_key("connected", {}) is None
+    assert _coalesce_key("agent_update", {}) is None  # agent_id 없으면 합치지 않음
+
+
+def test_merge_keeps_latest_fields_and_appends_alerts():
+    first = {"type": "agent_update", "data": {"agent_id": "A", "hostname": "PC-1", "current_state": "warning",
+                                              "alerts": [{"message": "a1"}]}}
+    offline = {"type": "agent_offline", "data": {"agent_id": "A", "is_online": False}}
+    merged = _merge(first, offline)
+    assert merged["type"] == "agent_offline"
+    assert merged["data"] == {"agent_id": "A", "hostname": "PC-1", "current_state": "warning",
+                              "is_online": False, "alerts": [{"message": "a1"}]}
+
+    second = {"type": "agent_update", "data": {"agent_id": "A", "current_state": "danger", "alerts": [{"message": "a2"}]}}
+    assert [a["message"] for a in _merge(first, second)["data"]["alerts"]] == ["a1", "a2"]
+
+
+def test_merged_alerts_capped(monkeypatch):
+    monkeypatch.setattr(ws_module, "MAX_MERGED_ALERTS", 3)
+    prev = {"type": "agent_update", "data": {"agent_id": "A", "alerts": [{"n": 1}, {"n": 2}]}}
+    new = {"type": "agent_update", "data": {"agent_id": "A", "alerts": [{"n": 3}, {"n": 4}]}}
+    assert [a["n"] for a in _merge(prev, new)["data"]["alerts"]] == [2, 3, 4]
+
+
+# ─── 전송 ────────────────────────────────────────────────────────
+
+def test_publish_does_not_wait_for_network():
+    """보고 처리에서 부르는 publish 는 일반 함수 (await 하지 않으므로 네트워크를 기다리지 않음)"""
+    assert not inspect.iscoroutinefunction(WSManager.publish)
+
+
+async def test_messages_delivered_in_order_to_each_dashboard(manager):
+    a, b = FakeWebSocket(), FakeWebSocket()
+    await manager.connect(a)
+    await manager.connect(b)
+    manager.publish("agent_update", {"agent_id": "A", "current_state": "safe"})
+    manager.publish("agent_update", {"agent_id": "B", "current_state": "warning"})
+    await settle()
+
+    for ws in (a, b):
+        assert types(ws) == ["connected", "agent_update", "agent_update"]
+        assert [m["data"]["agent_id"] for m in ws.sent[1:]] == ["A", "B"]
+
+
+async def test_pending_updates_merged_per_agent(manager):
+    """보내기 전에 쌓인 같은 PC 갱신은 1건으로 합치고(새 알림 이어 붙임), 요약은 최신 1건만"""
+    ws = FakeWebSocket()
+    await manager.connect(ws)
+    manager.publish("agent_update", {"agent_id": "A", "current_state": "warning", "alerts": [{"message": "a1"}]})
+    manager.publish("summary_update", {"danger_count": 0})
+    manager.publish("agent_update", {"agent_id": "A", "current_state": "danger", "alerts": [{"message": "a2"}]})
+    manager.publish("summary_update", {"danger_count": 1})
+    await settle()
+
+    assert types(ws) == ["connected", "agent_update", "summary_update"]
+    agent = ws.sent[1]["data"]
+    assert agent["current_state"] == "danger"
+    assert [a["message"] for a in agent["alerts"]] == ["a1", "a2"]
+    assert ws.sent[2]["data"] == {"danger_count": 1}
+
+
+async def test_merged_message_keeps_queue_position(manager):
+    """합친 메시지는 처음 들어온 자리를 유지 (뒤처진 대시보드에서도 요약이 뒤로 밀려 굶지 않도록)"""
+    ws = FakeWebSocket()
+    await manager.connect(ws)
+    manager.publish("agent_update", {"agent_id": "A"})
+    manager.publish("summary_update", {"danger_count": 0})
+    manager.publish("agent_update", {"agent_id": "B"})
+    manager.publish("summary_update", {"danger_count": 1})  # 이미 있는 요약 → 자리 유지, 내용만 최신
+    await settle()
+
+    assert types(ws) == ["connected", "agent_update", "summary_update", "agent_update"]
+    assert ws.sent[2]["data"] == {"danger_count": 1}
+    assert ws.sent[3]["data"]["agent_id"] == "B"
+
+
+async def test_failed_dashboard_dropped_others_unaffected(manager):
+    """보내기에 실패한 대시보드만 목록에서 빠지고 종료 신호(1013)를 받음, 다른 대시보드는 계속 받음"""
+    good, bad = FakeWebSocket(), FakeWebSocket(fail=True)
+    await manager.connect(good)
+    await manager.connect(bad)
+    await settle()
+    assert manager.connection_count == 1
+    assert bad.closed_with == 1013
+    assert not manager._closing  # 종료 신호 태스크는 끝나면 정리됨
+
+    manager.publish("agent_update", {"agent_id": "A"})
+    await settle()
+    assert types(good) == ["connected", "agent_update"]
+
+
+async def test_stalled_dashboard_dropped_after_send_timeout(manager, monkeypatch):
+    """보내기가 끝나지 않는 대시보드는 시간 제한 뒤 그것만 끊고, 다른 대시보드는 계속 받음"""
+    monkeypatch.setattr(ws_module, "SEND_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(ws_module, "CLOSE_TIMEOUT_SECONDS", 0.05)
+    stalled, healthy = FakeWebSocket(stall=True), FakeWebSocket()
+    await manager.connect(stalled)
+    await manager.connect(healthy)
+    await asyncio.sleep(0.2)
+    assert manager.connection_count == 1
+    assert not manager._closing  # 종료 신호도 막히면 제한 시간 뒤 포기
+
+    manager.publish("agent_update", {"agent_id": "A"})
+    await settle()
+    assert types(healthy) == ["connected", "agent_update"]
+
+
+async def test_queue_overflow_drops_dashboard(manager, monkeypatch):
+    """대기열이 상한을 넘으면 그 대시보드를 끊음 (재연결해서 전체를 다시 불러오도록)"""
+    monkeypatch.setattr(ws_module, "MAX_PENDING", 3)
+    ws = FakeWebSocket()
+    await manager.connect(ws)  # 'connected' 1건이 대기열에 있음
+    for i in range(3):
+        manager.publish("notice", {"n": i})  # 합치지 않는 메시지
+    assert manager.connection_count == 0
+    await settle()
+    assert ws.closed_with == 1013
+
+
+async def test_disconnect_stops_sender(manager):
+    ws = FakeWebSocket()
+    await manager.connect(ws)
+    await settle()
+    client_task = next(iter(manager._clients.values())).task
+    await manager.disconnect(ws)
+    await settle()
+    assert manager.connection_count == 0
+    assert client_task.cancelled() or client_task.done()
+
+    manager.publish("agent_update", {"agent_id": "A"})  # 끊긴 대시보드로는 보내지 않음
+    await settle()
+    assert types(ws) == ["connected"]
+
+
+def test_summary_request_taken_once():
+    manager = WSManager()
+    assert manager.take_summary_request() is False
+    manager.request_summary()
+    manager.request_summary()
+    assert manager.take_summary_request() is True
+    assert manager.take_summary_request() is False
+
+
+# ─── 보고 처리 경로 ─────────────────────────────────────────────
+
+async def test_register_and_offline_notify_after_commit(db, monkeypatch):
+    """등록·오프라인 처리는 저장을 확정한 뒤 대시보드에 알림 (요약은 다른 DB 세션에서 계산하므로 확정 전이면 이전 상태로 셈)"""
+    calls = []
+    monkeypatch.setattr(agents.ws_manager, "publish", lambda t, d: calls.append((t, db.in_transaction())))
+    monkeypatch.setattr(agents.ws_manager, "request_summary", lambda: calls.append(("summary", db.in_transaction())))
+
+    await agents.register_agent(AgentRegisterRequest(agent_id="A", hostname="PC-1"), db)
+    await agents.receive_offline(AgentOfflineRequest(agent_id="A"), db)
+
+    # in_transaction()=False: 확정(commit)이 끝나 아직 확정되지 않은 변경이 없음
+    assert calls == [("agent_online", False), ("summary", False), ("agent_offline", False), ("summary", False)]
+
+
+async def test_report_not_blocked_by_stalled_dashboard(db, manager, monkeypatch):
+    """받아 가지 않는 대시보드가 연결돼 있어도 보고 처리는 전송을 기다리지 않고 끝남"""
+    monkeypatch.setattr(agents, "ws_manager", manager)
+    stalled, healthy = FakeWebSocket(stall=True), FakeWebSocket()
+    await manager.connect(stalled)
+    await manager.connect(healthy)
+    req = StatusReportRequest(agent_id="A", hostname="PC-521-01", user_state="safe", alerts=[], active_detections=[])
+    try:
+        for _ in range(3):
+            await asyncio.wait_for(agents.receive_report(req, db), 2)
+        await settle()
+        assert "agent_update" in types(healthy)
+    finally:
+        agent_service.clear_active_detections("A")
+        agent_service.clear_danger_state("A")
+
+
+# ─── 요약·연결 확인 신호 주기 전송 ────────────────────────────────
+
+async def test_dashboard_pusher(manager, monkeypatch):
+    """요약은 요청이 있을 때만 1번 계산(대시보드가 없으면 DB 조회 안 함), 연결 확인 신호는 주기적으로 보냄"""
+    computed = []
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    async def fake_summary(db):
+        computed.append(db)
+        return SimpleNamespace(model_dump=lambda mode: {"danger_count": len(computed)})
+
+    monkeypatch.setattr(main, "ws_manager", manager)
+    monkeypatch.setattr(main, "AsyncSessionLocal", FakeSession)
+    monkeypatch.setattr(main.agent_service, "get_dashboard_summary", fake_summary)
+    monkeypatch.setattr(main, "DASHBOARD_SUMMARY_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(main, "DASHBOARD_HEARTBEAT_SECONDS", 0.1)
+    pusher = asyncio.create_task(main._dashboard_pusher())
+    try:
+        manager.request_summary()  # 연결된 대시보드 없음 → 계산하지 않음
+        await asyncio.sleep(0.05)
+        assert computed == []
+
+        ws = FakeWebSocket()
+        await manager.connect(ws)
+        manager.request_summary()
+        manager.request_summary()  # 요청이 여러 번이어도 계산은 1번
+        await asyncio.sleep(0.3)
+        assert len(computed) == 1
+        assert [m["data"] for m in ws.sent if m["type"] == "summary_update"] == [{"danger_count": 1}]
+        assert "heartbeat" in types(ws)
+    finally:
+        pusher.cancel()
+        await asyncio.gather(pusher, return_exceptions=True)

@@ -88,7 +88,7 @@ export interface DashboardSummary {
 
 // WebSocket 메시지 타입
 export interface WSMessage {
-  type: 'agent_update' | 'agent_online' | 'agent_offline' | 'summary_update' | 'connected';
+  type: 'agent_update' | 'agent_online' | 'agent_offline' | 'summary_update' | 'connected' | 'heartbeat';
   data: Record<string, unknown>;
 }
 
