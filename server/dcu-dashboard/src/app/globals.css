@@ -312,6 +312,20 @@ html, body {
   color: var(--text-muted);
   margin-right: 4px;
 }
+/* DANGER 이유: 화면 앞에 띄운 차단 대상 */
+.agent-danger-reason {
+  color: var(--danger);
+  font-weight: 600;
+  border-left: 2px solid var(--danger);
+}
+.agent-danger-reason .fg-label {
+  color: var(--danger);
+  opacity: 0.8;
+}
+.agent-danger-reason .danger-duration {
+  font-weight: 500;
+  opacity: 0.85;
+}
 
 .agent-last-seen {
   font-size: 10px;
@@ -442,6 +456,21 @@ html, body {
   margin-top: 20px;
 }
 .modal-section-title:first-child { margin-top: 0; }
+
+/* 최근 알림 분류 선택 */
+.alert-category-select {
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background-color: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: pointer;
+  outline: none;
+}
 
 .process-list {
   display: flex;

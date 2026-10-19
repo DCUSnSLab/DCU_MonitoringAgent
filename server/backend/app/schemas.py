@@ -64,6 +64,8 @@ class ActiveDetectionSchema(BaseModel):
     target: str = ""  # 프로세스명 / URL / 창 제목
     source: str = ""  # process | url | title
     is_foreground: bool = False  # 지금 화면에 띄워져 있는지
+    # 서버가 채움: 이 대상이 화면 앞에 계속 떠 있기 시작한 시각 (화면 앞일 때만)
+    on_screen_since: Optional[datetime] = None
 
 
 class AgentRegisterRequest(BaseModel):
@@ -117,6 +119,12 @@ class AgentSummary(BaseModel):
     memory_percent: float = 0.0
     agent_version: Optional[str] = None
     os_version: Optional[str] = None
+    # DANGER일 때 그 이유 (화면 앞에 띄운 탐지 대상). DANGER 유지 시간 동안 함께 유지된다.
+    danger_reason: Optional[str] = None
+    # DANGER가 이어진 구간: 시작 시각, 마지막 DANGER 보고 시각, 지금도 화면에 떠 있는지 (유지 중일 때만)
+    danger_since: Optional[datetime] = None
+    danger_last_at: Optional[datetime] = None
+    danger_on_screen: bool = False
 
     class Config:
         from_attributes = True

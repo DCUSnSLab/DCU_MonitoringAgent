@@ -31,6 +31,12 @@ class Settings(BaseSettings):
         "claude": "claude.ai",
     }
 
+    # DANGER(차단 대상을 화면에 띄움)는 수집 주기 하나(약 3초)만 잡혔다 사라지기 쉬우므로,
+    # 대시보드에서 놓치지 않도록 마지막 DANGER 보고 후 이 시간(초) 동안 DANGER 상태와 이유를 유지한다.
+    danger_hold_seconds: int = 60
+    # 같은 대상을 화면에 다시 띄워도 '화면 표시' 알림은 이 간격(초)에 한 번만 남긴다.
+    on_screen_alert_cooldown_seconds: int = 60
+
     class Config:
         env_file = ".env"
 

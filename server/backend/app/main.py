@@ -51,6 +51,7 @@ async def _offline_watchdog():
 
                     for agent in offline_agents:
                         logger.info(f"에이전트 오프라인 감지: {agent.agent_id} ({agent.hostname})")
+                        agent_service.clear_danger_state(agent.agent_id)
                         # 에이전트 카드 상태 즉시 반영
                         await ws_manager.broadcast("agent_offline", {
                             "agent_id": agent.agent_id,

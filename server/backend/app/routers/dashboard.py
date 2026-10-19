@@ -38,9 +38,11 @@ async def get_summary(db: AsyncSession = Depends(get_db)):
 
     total = len(agents)
     online = sum(1 for a in agents if a.is_online)
-    safe = sum(1 for a in agents if a.current_state == "safe")
-    warning = sum(1 for a in agents if a.current_state == "warning")
-    danger = sum(1 for a in agents if a.current_state == "danger")
+    now = datetime.now(timezone.utc)
+    states = [agent_service.display_state(a, now) for a in agents]  # DANGER 유지 반영
+    safe = states.count("safe")
+    warning = states.count("warning")
+    danger = states.count("danger")
 
     # 최근 1시간 내 알림 수
     since = datetime.now(timezone.utc) - timedelta(hours=1)
@@ -68,7 +70,7 @@ async def list_agents(db: AsyncSession = Depends(get_db)):
     """
     result = await db.execute(select(Agent).order_by(Agent.registered_at))
     agents = result.scalars().all()
-    return [AgentSummary.model_validate(a) for a in agents]
+    return [agent_service.summarize_agent(a) for a in agents]
 
 
 @router.get("/agents/{agent_id}", response_model=AgentDetail)
@@ -109,7 +111,9 @@ async def get_agent_detail(agent_id: str, db: AsyncSession = Depends(get_db)):
         **summary.model_dump(),
         registered_at=agent.registered_at if agent else None,
         recent_alerts=alert_schemas,
-        active_detections=agent_service.get_active_detections(agent_id),
+        active_detections=agent_service.with_on_screen_since(
+            agent_id, agent_service.get_active_detections(agent_id)
+        ),
     )
 
 
