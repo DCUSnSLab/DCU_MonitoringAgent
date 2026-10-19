@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from 'react';
 import { LoginError, login } from '@/lib/api';
-import { saveSession } from '@/lib/auth';
+import { getSession, saveSession } from '@/lib/auth';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
@@ -18,6 +18,9 @@ export default function LoginPage() {
     try {
       // 저장하면 로그인 상태가 바뀌어 대시보드로 이동한다 (AuthGate)
       saveSession(await login(username.trim(), password));
+      if (!getSession()) {
+        setError('브라우저 저장소를 쓸 수 없어 로그인 상태를 유지할 수 없습니다. 사생활 보호 모드인지 확인하세요.');
+      }
     } catch (err) {
       setError(err instanceof LoginError ? err.message : '로그인에 실패했습니다.');
       setPassword('');
