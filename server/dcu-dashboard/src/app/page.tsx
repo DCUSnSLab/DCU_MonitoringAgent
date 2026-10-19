@@ -6,6 +6,13 @@ import AgentCard from '@/components/AgentCard';
 import AgentModal from '@/components/AgentModal';
 import Header from '@/components/Header';
 
+type SortOrder = 'asc' | 'desc';
+
+/** 숫자는 숫자로 비교하는 이름 정렬 (D2-535-2 < D2-535-10) */
+const naturalCompare = (a: string, b: string) => a.localeCompare(b, 'ko', { numeric: true, sensitivity: 'base' });
+const compareHostname = (a: AgentSummary, b: AgentSummary) =>
+  naturalCompare(a.hostname, b.hostname) || a.agent_id.localeCompare(b.agent_id);
+
 const alertTime = (a: AlertInfo) => (a.detected_at ? new Date(a.detected_at).getTime() : 0);
 const alertKey = (a: AlertInfo) => `${a.code}|${a.message}|${alertTime(a)}`;
 
@@ -23,6 +30,7 @@ export default function DashboardPage() {
   const [selected, setSelected]       = useState<AgentDetail | null>(null);
   const [selectedLab, setSelectedLab] = useState<string>('전체');
   const [onlineOnly, setOnlineOnly]   = useState<boolean>(false);
+  const [sortOrder, setSortOrder]     = useState<SortOrder>('asc');
   const [wsStatus, setWsStatus]       = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -121,10 +129,12 @@ export default function DashboardPage() {
 
   /* ── 렌더링 ── */
   /* ── 데이터 필터링 (강의실 기준) ── */
-  const labs = ['전체', ...Array.from(new Set(agents.map((a) => a.lab_name || '기타'))).sort()];
+  const labs = ['전체', ...Array.from(new Set(agents.map((a) => a.lab_name || '기타'))).sort(naturalCompare)];
+  // PC 이름순 정렬 (경고·주의 영역과 강의실별 목록 모두 같은 순서)
   const filteredAgents = agents
     .filter((a) => selectedLab === '전체' || (a.lab_name || '기타') === selectedLab)
-    .filter((a) => !onlineOnly || a.is_online);
+    .filter((a) => !onlineOnly || a.is_online)
+    .sort((a, b) => (sortOrder === 'asc' ? 1 : -1) * compareHostname(a, b));
 
   const filteredAgentIds = new Set(filteredAgents.map((a) => a.agent_id));
   const filteredAlerts = selectedLab === '전체'
@@ -188,6 +198,26 @@ export default function DashboardPage() {
           />
           🟢 온라인만 보기
         </label>
+
+        <select
+          value={sortOrder}
+          onChange={(e) => setSortOrder(e.target.value as SortOrder)}
+          aria-label="PC 정렬 순서"
+          style={{
+            padding: '8px 12px',
+            borderRadius: '6px',
+            border: '1px solid var(--border)',
+            backgroundColor: 'var(--bg-elevated)',
+            color: 'var(--text-primary)',
+            fontSize: '14px',
+            cursor: 'pointer',
+            fontWeight: 500,
+            outline: 'none',
+          }}
+        >
+          <option value="asc">PC 이름 ▲ 오름차순</option>
+          <option value="desc">PC 이름 ▼ 내림차순</option>
+        </select>
       </div>
 
       {/* ── 본문 ── */}
@@ -257,7 +287,7 @@ export default function DashboardPage() {
             acc[lab].push(agent);
             return acc;
           }, {} as Record<string, AgentSummary[]>)
-        ).sort().map(([labName, labAgents]) => {
+        ).sort(([a], [b]) => naturalCompare(a, b)).map(([labName, labAgents]) => {
           // 해당 강의실 통계
           const onlineCount = labAgents.filter(a => a.is_online).length;
           return (
