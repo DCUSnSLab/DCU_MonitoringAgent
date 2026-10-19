@@ -74,6 +74,7 @@ def clear_active_detections(agent_id: str) -> None:
 ON_SCREEN_ALERT_CODE = "ON_SCREEN"
 # 창 제목 앞의 알림 개수 표시 "(3) " — 수시로 바뀌므로 같은 창 판정에서 뗀다 (에이전트와 같은 규칙)
 _NOTIFICATION_PREFIX = re.compile(r"^\(\d+\+?\)\s*")
+# 화면 표시 알림 메시지의 앞부분. 대시보드 최근 알림(RecentAlerts.tsx)이 이 접두어로 원래 분류를 판단하므로 함께 바꿀 것.
 _DETECTION_LABELS = {
     "BLOCKED_PROCESS": "차단 프로그램",
     "UNAUTHORIZED_PROCESS": "허용되지 않은 프로그램",

@@ -457,36 +457,19 @@ html, body {
 }
 .modal-section-title:first-child { margin-top: 0; }
 
-/* 최근 알림 필터 칩 (눌러서 숨기기·보이기) */
-.alert-filter {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-.alert-filter-chip {
+/* 최근 알림 분류 선택 */
+.alert-category-select {
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
-  background: var(--bg-elevated);
-  color: var(--text-secondary);
-  border-radius: 999px;
-  padding: 3px 10px;
-  font-size: 11px;
-  cursor: pointer;
-  transition: opacity var(--transition), border-color var(--transition);
-}
-.alert-filter-chip .count { color: var(--text-muted); margin-left: 2px; }
-.alert-filter-chip.screen { color: var(--danger); border-color: var(--danger-border); }
-.alert-filter-chip.hidden { opacity: 0.45; text-decoration: line-through; }
-.alert-filter-chip:hover { border-color: var(--accent-light); }
-.alert-filter-reset {
-  border: none;
-  background: none;
-  color: var(--accent-light);
-  font-size: 11px;
-  cursor: pointer;
-  padding: 0;
+  background-color: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
   text-transform: none;
   letter-spacing: 0;
+  cursor: pointer;
+  outline: none;
 }
 
 .process-list {
