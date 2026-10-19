@@ -46,7 +46,7 @@ async def manager():
     """테스트용 전송 관리자. 끝날 때 대시보드별 전송 태스크를 정리한다."""
     m = WSManager()
     yield m
-    tasks = [c.task for c in m._clients.values()]
+    tasks = [c.task for c in m._clients.values()] + list(m._closing)
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
@@ -147,6 +147,7 @@ async def test_failed_dashboard_dropped_others_unaffected(manager):
     await settle()
     assert manager.connection_count == 1
     assert bad.closed_with == 1013
+    assert not manager._closing  # 종료 신호 태스크는 끝나면 정리됨
 
     manager.publish("agent_update", {"agent_id": "A"})
     await settle()

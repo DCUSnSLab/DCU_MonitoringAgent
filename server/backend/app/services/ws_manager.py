@@ -8,6 +8,8 @@ WebSocket 연결 매니저
   (전에는 보고 처리 중 대시보드마다 차례로 보내며 기다려서, 응답 없는 대시보드 하나가 DB 연결을 모두 묶었다)
 - 대시보드마다 전송 담당 태스크 1개가 대기열을 순서대로 보낸다. 한 번 보내는 데 SEND_TIMEOUT_SECONDS를 넘기거나
   대기열이 MAX_PENDING을 넘으면 그 대시보드 연결만 끊는다. 대시보드는 재연결한 뒤 전체를 다시 불러온다.
+  (보내기가 막혀 끊은 경우에는 종료 신호도 막혀 늦게 가거나 못 갈 수 있다. 그때는 대시보드가 일정 시간
+  아무 메시지도 받지 못하면 스스로 재연결한다 — 서버는 15초마다 연결 확인 신호를 보낸다)
 - 같은 PC의 갱신은 대기열에서 최신 1건으로 합치고(새 알림은 이어 붙임), 요약·연결 확인 신호도 최신 1건만 남긴다.
 """
 
@@ -25,8 +27,9 @@ logger = logging.getLogger(__name__)
 SEND_TIMEOUT_SECONDS = 5.0
 # 대시보드 1곳의 전송 대기열 상한 (합치기 후 기준: PC 수 + 요약 등). 넘으면 끊고 재연결·재조회로 회복
 MAX_PENDING = 3000
-# 끊을 때 종료 신호를 보내 보는 시간 (응답 없는 연결은 기다리지 않음)
-CLOSE_TIMEOUT_SECONDS = 1.0
+# 끊을 때 종료 신호를 보내 보는 최대 시간. 별도 태스크에서 기다리므로 보고 처리·다른 대시보드와 무관하다.
+# 보내기가 막혀 끊은 대시보드도 쌓인 데이터를 다 받으면 이 안에 종료 신호를 받고 바로 재연결한다.
+CLOSE_TIMEOUT_SECONDS = 60.0
 # 같은 PC 갱신을 합칠 때 이어 붙이는 새 알림 최대 건수
 MAX_MERGED_ALERTS = 50
 
@@ -104,6 +107,7 @@ class WSManager:
 
     def __init__(self):
         self._clients: dict[WebSocket, _DashboardClient] = {}
+        self._closing: set[asyncio.Task] = set()  # 종료 신호 태스크 (끝나기 전에 사라지지 않도록 참조 유지)
         self._summary_requested = False
 
     async def connect(self, websocket: WebSocket):
@@ -134,12 +138,15 @@ class WSManager:
             del self._clients[client.websocket]
         if client.task is not asyncio.current_task():
             client.task.cancel()
-        asyncio.create_task(self._close_quietly(client.websocket))
+        closing = asyncio.create_task(self._close_quietly(client.websocket))
+        self._closing.add(closing)
+        closing.add_done_callback(self._closing.discard)
 
     @staticmethod
     async def _close_quietly(websocket: WebSocket):
         try:
             # 1013: 잠시 후 다시 시도 → 대시보드가 재연결해 전체를 다시 불러온다
+            # (보내기가 막힌 연결은 쌓인 데이터가 빠져야 나간다. 끝내 못 보내면 대시보드의 무응답 감지로 회복)
             await asyncio.wait_for(websocket.close(code=1013), CLOSE_TIMEOUT_SECONDS)
         except Exception:
             pass
