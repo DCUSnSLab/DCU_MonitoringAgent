@@ -1,8 +1,6 @@
 """대시보드 관리자 로그인 테스트 (GEN-1682).
 
 관리자 계정 1개로 로그인해 토큰을 받고, 대시보드·통계 API와 실시간 연결은 토큰이 있어야 쓸 수 있다.
-로그인에 연속 10회 실패하면 잠그고, 잠글 때마다 1분 → 5분 → 30분 → 60분 → 120분으로 늘린다.
-실패는 신뢰 기기(전에 로그인한 브라우저)면 기기별로, 아니면 접속 IP별로 센다.
 """
 import re
 import threading
@@ -17,20 +15,16 @@ from app import main
 from app.config import settings
 from app.database import get_db
 from app.services import auth_service
-from app.services.auth_service import LoginLockout, login_lockout
 
 PASSWORD = "test-password!"
 
 
 @pytest.fixture(autouse=True)
 def admin_account(monkeypatch):
-    """테스트용 관리자 계정 (운영 비밀번호는 코드에 없음), 로그인 잠금 기록 초기화."""
+    """테스트용 관리자 계정 (운영 비밀번호는 코드에 없음)."""
     monkeypatch.setattr(settings, "dashboard_admin_username", "admin")
     monkeypatch.setattr(settings, "dashboard_admin_password", PASSWORD)
     monkeypatch.setattr(settings, "dashboard_token_secret", "test-secret")
-    login_lockout._states.clear()
-    yield
-    login_lockout._states.clear()
 
 
 @pytest.fixture
@@ -104,103 +98,11 @@ def test_no_password_configured_means_no_login(monkeypatch):
     assert not auth_service.check_credentials("admin", "")
 
 
-def test_device_token_roundtrip_and_forgery(monkeypatch):
-    device_token = auth_service.issue_device_token()
-    device_id = auth_service.verify_device_token(device_token)
-    assert device_id
-    assert auth_service.verify_device_token(auth_service.issue_device_token(device_id)) == device_id  # 같은 기기 유지
-
-    payload, signature = device_token.split(".")
-    forged = auth_service._b64encode(b'{"dev":"attacker"}')
-    for bad in (None, "", "garbage", f"{forged}.{signature}", device_token + "x", "\u00e9.abc"):
-        assert auth_service.verify_device_token(bad) is None, bad
-
-    # 로그인 토큰과 기기 토큰은 서로 대신 쓸 수 없음
-    login_token, _ = auth_service.issue_token("admin")
-    assert auth_service.verify_device_token(login_token) is None
-    assert auth_service.verify_token(device_token) is None
-
-    # 비밀번호를 바꿔도 신뢰 기기는 유지, 서명 비밀값이 바뀌면 무효
-    monkeypatch.setattr(settings, "dashboard_admin_password", "changed")
-    assert auth_service.verify_device_token(device_token) == device_id
-    monkeypatch.setattr(settings, "dashboard_token_secret", "other-secret")
-    assert auth_service.verify_device_token(device_token) is None
-
-
-def test_lockout_key():
-    device_token = auth_service.issue_device_token()
-    device_id = auth_service.verify_device_token(device_token)
-    assert auth_service.lockout_key(device_token, "1.2.3.4") == f"device:{device_id}"
-    assert auth_service.lockout_key(None, "1.2.3.4") == "ip:1.2.3.4"
-    assert auth_service.lockout_key("forged.token", "1.2.3.4") == "ip:1.2.3.4"
-
-
 def test_token_from_subprotocols():
     assert auth_service.token_from_subprotocols(["bearer", "t0k"]) == "t0k"
     assert auth_service.token_from_subprotocols(["bearer"]) is None
     assert auth_service.token_from_subprotocols(["other", "t0k"]) is None
     assert auth_service.token_from_subprotocols([]) is None
-
-
-# ─── 로그인 잠금 ─────────────────────────────────────────────────
-
-def fail(lockout: LoginLockout, times: int, now: float, key: str = "ip") -> float:
-    """times 번 실패를 기록하고 마지막 기록의 잠금 시간(초)을 돌려준다."""
-    seconds = 0.0
-    for _ in range(times):
-        seconds = lockout.record_failure(key, now)
-    return seconds
-
-
-def test_lockout_after_ten_failures():
-    lockout = LoginLockout(max_failures=10, lock_minutes=(1, 5, 30, 60, 120), reset_seconds=86400)
-    assert fail(lockout, 9, 0.0) == 0
-    assert lockout.locked_seconds("ip", 0.0) == 0
-
-    assert fail(lockout, 1, 0.0) == 60  # 10번째 실패에서 1분 잠금
-    assert lockout.locked_seconds("ip", 30.0) == 30
-    assert lockout.locked_seconds("ip", 60.0) == 0  # 풀림
-    assert fail(lockout, 9, 60.0) == 0  # 풀리면 다시 10번 실패해야 다음 단계
-    assert fail(lockout, 1, 60.0) == 300  # 다음 단계 5분
-
-
-def test_lockout_steps_escalate_then_repeat_last():
-    lockout = LoginLockout(max_failures=10, lock_minutes=(1, 5, 30, 60, 120), reset_seconds=86400)
-    now, minutes = 0.0, []
-    for _ in range(7):
-        seconds = fail(lockout, 10, now)
-        minutes.append(seconds / 60)
-        now += seconds  # 잠금이 풀린 뒤 다시 10번 실패
-    assert minutes == [1, 5, 30, 60, 120, 120, 120]
-
-
-def test_lockout_is_per_client():
-    lockout = LoginLockout(max_failures=10, lock_minutes=(1,), reset_seconds=86400)
-    fail(lockout, 10, 0.0, key="a")
-    assert lockout.locked_seconds("a", 0.0) == 60
-    assert lockout.locked_seconds("b", 0.0) == 0
-
-
-def test_lockout_keeps_bounded_records(monkeypatch):
-    monkeypatch.setattr(LoginLockout, "MAX_TRACKED", 3)
-    lockout = LoginLockout(max_failures=10, lock_minutes=(1,), reset_seconds=86400)
-    for key in ("a", "b", "c"):
-        lockout.record_failure(key, 0.0)
-    lockout.record_failure("a", 1.0)  # a 는 최근 실패 → 뒤로
-    lockout.record_failure("d", 2.0)  # 상한 → 가장 오래된 b 를 버림
-    assert list(lockout._states) == ["c", "a", "d"]
-
-
-def test_lockout_reset_by_success_or_quiet_day():
-    lockout = LoginLockout(max_failures=10, lock_minutes=(1, 5), reset_seconds=86400)
-    fail(lockout, 10, 0.0)  # 1분 잠금
-    lockout.record_success("ip")
-    assert fail(lockout, 10, 100.0) == 60  # 성공으로 처음 단계부터
-
-    # 하루 동안 실패가 없으면 처음 단계부터
-    assert fail(lockout, 10, 100.0 + 60 + 86400) == 60
-    # 하루가 안 지났으면 다음 단계
-    assert fail(lockout, 10, 100.0 + 60 + 86400 + 60 + 10) == 300
 
 
 # ─── 로그인 API · 보호 ───────────────────────────────────────────
@@ -211,7 +113,6 @@ async def test_login_and_access_protected_api(client):
     body = r.json()
     assert body["username"] == "admin" and body["expires_at"]
     assert abs(body["expires_in"] - settings.dashboard_token_ttl_hours * 3600) <= 2
-    assert auth_service.verify_device_token(body["device_token"])
     token = body["token"]
 
     assert (await client.get("/api/auth/me", headers=bearer(token))).json() == {"username": "admin"}
@@ -240,63 +141,14 @@ async def test_agent_and_ota_endpoints_unaffected(client):
     assert r.status_code == 200
 
 
-async def test_wrong_password_then_locks(client):
-    for _ in range(9):
+async def test_wrong_password_rejected_without_lockout(client):
+    """틀린 비밀번호는 401, 여러 번 틀려도 잠그지 않음 (맞는 비밀번호로 바로 로그인 가능)"""
+    for _ in range(15):
         r = await client.post("/api/auth/login", json={"username": "admin", "password": "wrong"})
         assert r.status_code == 401
-        assert r.json()["detail"] == "아이디 또는 비밀번호가 올바르지 않습니다"  # 남은 시도 횟수는 알려 주지 않음
-
-    r = await client.post("/api/auth/login", json={"username": "admin", "password": "wrong"})
-    assert r.status_code == 429
-    assert r.headers["retry-after"] == "60" and r.json()["retry_after"] == 60
-    assert "1분" in r.json()["detail"]
-
-    # 잠긴 동안에는 맞는 비밀번호도 거부 (비밀번호 확인 안 함)
+        assert r.json()["detail"] == "아이디 또는 비밀번호가 올바르지 않습니다"
     r = await client.post("/api/auth/login", json={"username": "admin", "password": PASSWORD})
-    assert r.status_code == 429
-
-
-async def test_successful_login_resets_failures(client):
-    for _ in range(5):
-        await client.post("/api/auth/login", json={"username": "admin", "password": "wrong"})
-    assert (await client.post("/api/auth/login", json={"username": "admin", "password": PASSWORD})).status_code == 200
-    # 성공으로 실패 횟수가 초기화돼, 다시 9번 틀려도 잠기지 않음 (초기화가 안 됐으면 5번째에 잠김)
-    for _ in range(9):
-        r = await client.post("/api/auth/login", json={"username": "admin", "password": "wrong"})
-        assert r.status_code == 401
-
-
-async def login_request(client, password, device_token=None):
-    body = {"username": "admin", "password": password}
-    if device_token:
-        body["device_token"] = device_token
-    return await client.post("/api/auth/login", json=body)
-
-
-async def test_trusted_device_can_login_while_others_locked(client):
-    """다른 사람(신뢰 기기 아님)이 잠금을 걸어도, 전에 로그인한 브라우저는 계속 로그인 가능"""
-    device_token = (await login_request(client, PASSWORD)).json()["device_token"]
-
-    for _ in range(10):
-        r = await login_request(client, "wrong")  # 공격자: 기기 토큰 없음 (운영에서는 모두 같은 IP)
-    assert r.status_code == 429
-    assert (await login_request(client, PASSWORD)).status_code == 429  # 처음 쓰는 브라우저는 잠김
-    assert (await login_request(client, PASSWORD, "forged.token")).status_code == 429  # 위조 기기 토큰도
-
-    r = await login_request(client, PASSWORD, device_token)
     assert r.status_code == 200
-    assert auth_service.verify_device_token(r.json()["device_token"]) == auth_service.verify_device_token(device_token)
-
-
-async def test_trusted_device_failures_counted_per_device(client):
-    device_token = (await login_request(client, PASSWORD)).json()["device_token"]
-    for _ in range(10):
-        r = await login_request(client, "wrong", device_token)
-    assert r.status_code == 429  # 신뢰 기기도 10번 틀리면 그 기기는 잠김
-    assert (await login_request(client, PASSWORD, device_token)).status_code == 429
-    # 다른 곳(신뢰 기기 아님)의 실패 횟수와는 별개 → 9번까지는 잠기지 않음
-    for _ in range(9):
-        assert (await login_request(client, "wrong")).status_code == 401
 
 
 async def test_login_unavailable_without_configured_password(client, monkeypatch):

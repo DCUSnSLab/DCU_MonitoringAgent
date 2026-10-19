@@ -49,24 +49,6 @@ export function saveSession(session: Session): void {
   window.dispatchEvent(new Event(CHANGE_EVENT));
 }
 
-// 신뢰 기기 토큰: 로그인에 성공한 브라우저임을 서버가 알아보는 값. 로그아웃해도 지우지 않는다
-// (다른 사람이 틀린 로그인으로 잠금을 걸어도, 이 브라우저는 따로 세어 계속 로그인할 수 있음)
-const DEVICE_KEY = 'dcu_dashboard_device';
-
-export function getDeviceToken(): string | null {
-  try {
-    return localStorage.getItem(DEVICE_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function saveDeviceToken(token: string): void {
-  try {
-    localStorage.setItem(DEVICE_KEY, token);
-  } catch { /* 저장 불가 — 다음 로그인 때 신뢰 기기로 인정받지 못할 뿐 */ }
-}
-
 /** 로그아웃 (토큰이 만료·거부됐을 때도 호출 → 로그인 화면으로 이동) */
 export function clearSession(): void {
   try {

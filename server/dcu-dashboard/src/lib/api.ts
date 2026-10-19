@@ -1,6 +1,6 @@
 // API 타입 정의 및 클라이언트 함수
 
-import { Session, clearSession, getDeviceToken, getToken, saveDeviceToken } from './auth';
+import { Session, clearSession, getToken } from './auth';
 
 export type UserState = 'safe' | 'warning' | 'danger' | 'unknown';
 
@@ -186,8 +186,7 @@ export async function login(username: string, password: string): Promise<Session
       method: 'POST',
       cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
-      // 전에 로그인했던 브라우저면 신뢰 기기 토큰을 함께 보낸다 (잠금을 이 브라우저 기준으로 따로 셈)
-      body: JSON.stringify({ username, password, device_token: getDeviceToken() }),
+      body: JSON.stringify({ username, password }),
     });
   } catch {
     throw new LoginError('서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.');
@@ -195,14 +194,13 @@ export async function login(username: string, password: string): Promise<Session
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
     const detail = typeof body?.detail === 'string' ? body.detail : null;
-    // 아이디·비밀번호 오류(401), 잠금(429), 서버 설정 없음(503)은 서버가 보낸 안내를 그대로 보여 준다
-    if (detail && [401, 429, 503].includes(res.status)) throw new LoginError(detail);
+    // 아이디·비밀번호 오류(401), 서버 설정 없음(503)은 서버가 보낸 안내를 그대로 보여 준다
+    if (detail && [401, 503].includes(res.status)) throw new LoginError(detail);
     if (res.status === 404 || res.status === 405) {
       throw new LoginError('서버가 로그인 기능을 지원하지 않습니다. 백엔드 배포 상태를 확인하세요.');
     }
     throw new LoginError(`서버 오류로 로그인하지 못했습니다 (${res.status})`);
   }
-  if (typeof body.device_token === 'string') saveDeviceToken(body.device_token);
   // 만료 시각은 이 PC 시계 기준으로 계산 (PC 시계가 서버와 달라도 바로 만료로 보지 않도록)
   const expiresAt = typeof body.expires_in === 'number'
     ? Date.now() + body.expires_in * 1000
