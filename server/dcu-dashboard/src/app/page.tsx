@@ -48,6 +48,51 @@ function mergeRecentAlerts(current: AlertInfo[], incoming: AlertInfo[]): AlertIn
   return [...fresh, ...current].sort((a, b) => alertTime(b) - alertTime(a)).slice(0, 50);
 }
 
+// PC 실시간 갱신 (agent_update 에는 이번 보고의 새 알림도 담김)
+type AgentUpdate = AgentSummary & { alerts?: AlertInfo[] };
+
+const isAgentMessage = (m: WSMessage) =>
+  m.type === 'agent_update' || m.type === 'agent_online' || m.type === 'agent_offline';
+
+/** PC 목록에 실시간 갱신 1건을 반영 (없던 PC면 추가) */
+function applyAgentUpdate(list: AgentSummary[], updated: AgentSummary): AgentSummary[] {
+  const idx = list.findIndex((a) => a.agent_id === updated.agent_id);
+  if (idx < 0) return [...list, updated];
+  const next = [...list];
+  next[idx] = { ...next[idx], ...updated };
+  return next;
+}
+
+/** 열린 상세에 같은 PC의 실시간 갱신 1건을 반영 (새 알림은 최근 알림 맨 위에 — 빨간 '화면 표시' 알림 포함) */
+function applyDetailUpdate(detail: AgentDetail, updated: AgentUpdate): AgentDetail {
+  const merged = { ...detail, ...updated } as AgentDetail;
+  if (updated.alerts?.length) merged.recent_alerts = mergeRecentAlerts(detail.recent_alerts, updated.alerts);
+  return merged;
+}
+
+/** 서버 조회가 진행되는 동안 받은 실시간 메시지 기록 */
+interface LiveLog {
+  active: number; // 진행 중인 조회 수 (0이면 기록하지 않음)
+  messages: WSMessage[];
+}
+
+/**
+ * 서버 조회 결과와 함께, 조회하는 동안 받은 실시간 메시지를 돌려준다.
+ * 조회 결과는 요청 시점의 상태라서, 그사이 받은 메시지를 결과에 이어 다시 적용해야
+ * 더 새로운 상태(오프라인 전환·새 알림 등)가 조회 결과에 덮이지 않는다.
+ */
+async function withLiveMessages<T>(log: LiveLog, request: Promise<T>): Promise<[T, WSMessage[]]> {
+  const start = log.messages.length;
+  log.active += 1;
+  try {
+    const result = await request;
+    return [result, log.messages.slice(start)];
+  } finally {
+    log.active -= 1;
+    if (log.active === 0) log.messages = [];
+  }
+}
+
 export default function DashboardPage() {
   const [summary, setSummary]         = useState<DashboardSummary | null>(null);
   const [agents, setAgents]           = useState<AgentSummary[]>([]);
@@ -58,17 +103,15 @@ export default function DashboardPage() {
   const [sortOption, setSortOption]   = useState<SortOption>('name-asc');
   const [wsStatus, setWsStatus]       = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const wsRef = useRef<WebSocket | null>(null);
+  const liveLogRef = useRef<LiveLog>({ active: 0, messages: [] });
 
-  /* ── 초기 데이터 로드 ── */
-  const loadInitial = useCallback(async () => {
-    try {
-      const [s, a, al] = await Promise.all([api.getSummary(), api.getAgents(), api.getAlerts(50)]);
-      setSummary(s);
-      setAgents(a);
-      setAlerts(al);
-    } catch (e) {
-      console.error('초기 데이터 로드 실패:', e);
-    }
+  /** PC 상세를 서버에서 불러와 모달에 반영 (open=false면 그 PC 모달이 열려 있을 때만) */
+  const loadDetail = useCallback(async (id: string, open: boolean) => {
+    const [detail, live] = await withLiveMessages(liveLogRef.current, api.getAgent(id));
+    const latest = live
+      .filter((m) => isAgentMessage(m) && m.data.agent_id === id)
+      .reduce((d, m) => applyDetailUpdate(d, m.data as unknown as AgentUpdate), detail);
+    setSelected((prev) => (open || (prev && prev.agent_id === id) ? latest : prev));
   }, []);
 
   // 열린 상세 모달의 PC (재연결 시 다시 불러오기용)
@@ -83,14 +126,34 @@ export default function DashboardPage() {
     let disposed = false;
     let hasConnected = false;
     let lastMessageAt = Date.now();
+    let loadSeq = 0;
+    let appliedSeq = 0;
+
+    /** 요약·PC 목록·경고 이력을 서버에서 불러온다. 성공하면 true */
+    async function loadAll(): Promise<boolean> {
+      const seq = ++loadSeq;
+      try {
+        const [[s, a, al], live] = await withLiveMessages(
+          liveLogRef.current,
+          Promise.all([api.getSummary(), api.getAgents(), api.getAlerts(50)]),
+        );
+        if (disposed || seq < appliedSeq) return true; // 나중에 시작한 조회가 이미 반영됨
+        appliedSeq = seq;
+        const lastSummary = live.filter((m) => m.type === 'summary_update').pop();
+        setSummary(lastSummary ? (lastSummary.data as unknown as DashboardSummary) : s);
+        setAgents(live.filter(isAgentMessage).reduce((list, m) => applyAgentUpdate(list, m.data as unknown as AgentSummary), a));
+        setAlerts(al);
+        return true;
+      } catch (e) {
+        console.error('데이터 로드 실패:', e);
+        return false;
+      }
+    }
 
     /** 열린 상세 모달을 서버 기준으로 다시 불러온다 */
     function refreshSelected() {
       const id = selectedIdRef.current;
-      if (!id) return;
-      api.getAgent(id)
-        .then((detail) => setSelected((prev) => (prev && prev.agent_id === id ? detail : prev)))
-        .catch(() => {});
+      if (id) loadDetail(id, false).catch(() => {});
     }
 
     function connect() {
@@ -101,10 +164,15 @@ export default function DashboardPage() {
       ws.onopen = () => {
         setWsStatus('connected');
         lastMessageAt = Date.now();
-        // 재연결이면 끊긴 동안 놓친 변경(목록·요약·이력·열린 상세)을 서버에서 다시 불러온다
+        // 재연결이면 끊긴 동안 놓친 변경(목록·요약·이력·열린 상세)을 서버에서 다시 불러온다.
+        // 첫 연결이면 처음 불러오기가 실패했을 때만 다시 불러온다 (서버 재시작 중에 화면을 연 경우 등)
         if (hasConnected) {
-          loadInitial();
+          loadAll();
           refreshSelected();
+        } else {
+          initialLoad.then((ok) => {
+            if (!ok && !disposed) loadAll();
+          });
         }
         hasConnected = true;
       };
@@ -122,43 +190,27 @@ export default function DashboardPage() {
           // 연결 확인 신호·연결 확인 메시지는 수신 시각만 기록
           if (msg.type === 'heartbeat' || msg.type === 'connected') return;
 
+          // 서버에서 불러오는 중이면 기록해 두었다가 조회 결과에 이어 다시 적용
+          const liveLog = liveLogRef.current;
+          if (liveLog.active > 0) liveLog.messages.push(msg);
+
           // ── 요약 카드 즉시 갱신 ──
           if (msg.type === 'summary_update') {
             setSummary(msg.data as unknown as DashboardSummary);
             return;
           }
 
-          // ── 에이전트 카드 실시간 갱신 ──
-          if (msg.type === 'agent_update' || msg.type === 'agent_online' || msg.type === 'agent_offline') {
-            const updated = msg.data as unknown as AgentSummary;
-            setAgents((prev) => {
-              const idx = prev.findIndex((a) => a.agent_id === updated.agent_id);
-              if (idx >= 0) {
-                const next = [...prev];
-                next[idx] = { ...next[idx], ...updated };
-                return next;
-              }
-              return [...prev, updated];
-            });
-            // 모달이 열린 상태라면 실시간 업데이트
-            // (이번 보고의 새 알림은 최근 알림 맨 위에 붙인다 — 빨간 '화면 표시' 알림 포함)
-            const newAlerts = (msg.data as { alerts?: AlertInfo[] }).alerts ?? [];
-            setSelected((prev) => {
-              if (prev && prev.agent_id === updated.agent_id) {
-                const merged = { ...prev, ...updated } as AgentDetail;
-                if (newAlerts.length > 0) {
-                  merged.recent_alerts = mergeRecentAlerts(prev.recent_alerts, newAlerts);
-                }
-                return merged;
-              }
-              return prev;
-            });
+          // ── 에이전트 카드 실시간 갱신 (모달이 열린 상태라면 모달도) ──
+          if (isAgentMessage(msg)) {
+            const updated = msg.data as unknown as AgentUpdate;
+            setAgents((prev) => applyAgentUpdate(prev, updated));
+            setSelected((prev) => (prev && prev.agent_id === updated.agent_id ? applyDetailUpdate(prev, updated) : prev));
           }
         } catch { /* ignore */ }
       };
     }
 
-    loadInitial();
+    const initialLoad = loadAll();
     connect();
 
     // 요약 통계는 30초마다 REST로 갱신
@@ -183,17 +235,16 @@ export default function DashboardPage() {
       clearInterval(watchdogTimer);
       wsRef.current?.close();
     };
-  }, [loadInitial]);
+  }, [loadDetail]);
 
   /* ── 에이전트 카드 클릭 → 상세 모달 ── */
   const handleCardClick = useCallback(async (agentId: string) => {
     try {
-      const detail = await api.getAgent(agentId);
-      setSelected(detail);
+      await loadDetail(agentId, true);
     } catch (e) {
       console.error('에이전트 상세 로드 실패:', e);
     }
-  }, []);
+  }, [loadDetail]);
 
   /* ── 렌더링 ── */
   /* ── 데이터 필터링 (강의실 기준) ── */
