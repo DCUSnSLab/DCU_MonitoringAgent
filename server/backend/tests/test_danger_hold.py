@@ -34,14 +34,12 @@ def _clear_memory():
 
 @pytest.fixture
 def broadcasts(monkeypatch):
-    """WebSocket 브로드캐스트 내용을 기록 (연결된 대시보드 없이 페이로드 확인)."""
+    """대시보드 전송 대기열에 넣은 내용을 기록 (연결된 대시보드 없이 페이로드 확인)."""
     sent = []
-
-    async def fake_broadcast(message_type, data):
-        sent.append((message_type, data))
-
-    monkeypatch.setattr(agents.ws_manager, "broadcast", fake_broadcast)
-    return sent
+    monkeypatch.setattr(agents.ws_manager, "publish", lambda message_type, data: sent.append((message_type, data)))
+    agents.ws_manager.take_summary_request()
+    yield sent
+    agents.ws_manager.take_summary_request()
 
 
 def det(target, code="BLOCKED_URL", source="url", fg=True):
@@ -265,10 +263,11 @@ async def test_report_flow_holds_danger_and_records_on_screen_alert(db, broadcas
     assert "T" in last_update["danger_since"]  # 브라우저가 해석할 수 있는 ISO 형식
 
     # 상단 요약(REST·WS)도 원래 상태 WARNING이 아니라 유지 중인 DANGER로 셈
+    # (WS 요약은 보고마다 계산하지 않고 갱신 요청만 남기며, 주기 태스크가 get_dashboard_summary 로 계산해 보낸다)
     for summary in (await dashboard.get_summary(db), await agent_service.get_dashboard_summary(db)):
         assert (summary.danger_count, summary.warning_count) == (1, 0)
-    last_summary = [d for t, d in broadcasts if t == "summary_update"][-1]
-    assert (last_summary["danger_count"], last_summary["warning_count"]) == (1, 0)
+    assert agents.ws_manager.take_summary_request() is True
+    assert not [t for t, _ in broadcasts if t == "summary_update"]
 
 
 async def test_dashboard_shows_danger_reason(db, broadcasts):

@@ -48,7 +48,9 @@ async def register_agent(
     # 대시보드에 신규 에이전트 알림
     summary = await agent_service.get_agent_summary(db, req.agent_id)
     if summary:
-        await ws_manager.broadcast("agent_online", summary.model_dump())
+        # 대시보드 전송은 대기열에 넣고 바로 진행 (네트워크를 기다리며 DB 연결을 쥐지 않음)
+        ws_manager.publish("agent_online", summary.model_dump(mode="json"))
+        ws_manager.request_summary()
     return {"status": "registered", "agent_id": agent.agent_id}
 
 
@@ -122,11 +124,11 @@ async def receive_report(
                 d.model_dump(mode="json")
                 for d in agent_service.with_on_screen_since(req.agent_id, req.active_detections)
             ]
-        await ws_manager.broadcast("agent_update", update)
+        # 대시보드 전송은 대기열에 넣고 바로 진행 (응답 없는 대시보드가 있어도 보고 처리·DB 연결이 묶이지 않음)
+        ws_manager.publish("agent_update", update)
 
-    # 전체 요약 통계도 실시간 브로드캐스트 (헤더 카드 즉시 갱신용)
-    dashboard_summary = await agent_service.get_dashboard_summary(db)
-    await ws_manager.broadcast("summary_update", dashboard_summary.model_dump())
+    # 전체 요약 통계는 보고마다 계산하지 않고, 주기 태스크가 1초에 한 번 계산해 보낸다 (main._dashboard_pusher)
+    ws_manager.request_summary()
 
     logger.debug(f"보고 수신: {req.agent_id} → {req.user_state} (알림 {len(req.alerts)}개)")
 
@@ -175,17 +177,15 @@ async def receive_offline(
 
     agent = await agent_service.get_agent_summary(db, req.agent_id)
     if agent:
-        await ws_manager.broadcast("agent_offline", {
+        ws_manager.publish("agent_offline", {
             "agent_id": agent.agent_id,
             "hostname": agent.hostname,
             "is_online": False,
             "current_state": agent.current_state,
             "active_detections": [],
         })
+    ws_manager.request_summary()
 
-    dashboard_summary = await agent_service.get_dashboard_summary(db)
-    await ws_manager.broadcast("summary_update", dashboard_summary.model_dump())
-    
     logger.info(f"에이전트 오프라인 명시적 알림 수신: {req.agent_id}")
     return {"status": "ok"}
 
