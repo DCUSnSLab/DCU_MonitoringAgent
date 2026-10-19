@@ -8,6 +8,10 @@ import Header from '@/components/Header';
 
 type SortOption = 'name-asc' | 'name-desc' | 'seat-asc' | 'seat-desc';
 
+// 실시간 연결: 끊기면 이만큼 뒤 재연결, 이만큼 아무 메시지도 없으면 멈춘 연결로 보고 재연결 (서버 신호는 15초마다)
+const WS_RECONNECT_DELAY_MS = 3_000;
+const WS_SILENCE_LIMIT_MS = 45_000;
+
 /** 숫자는 숫자로 비교하는 이름 정렬 (D2-535-2 < D2-535-10) */
 const naturalCompare = (a: string, b: string) => a.localeCompare(b, 'ko', { numeric: true, sensitivity: 'base' });
 const compareHostname = (a: AgentSummary, b: AgentSummary) =>
@@ -67,25 +71,56 @@ export default function DashboardPage() {
     }
   }, []);
 
+  // 열린 상세 모달의 PC (재연결 시 다시 불러오기용)
+  const selectedIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    selectedIdRef.current = selected?.agent_id ?? null;
+  }, [selected]);
+
   /* ── WebSocket 연결 ── */
   useEffect(() => {
     let reconnectTimer: ReturnType<typeof setTimeout>;
+    let disposed = false;
+    let hasConnected = false;
+    let lastMessageAt = Date.now();
+
+    /** 열린 상세 모달을 서버 기준으로 다시 불러온다 */
+    function refreshSelected() {
+      const id = selectedIdRef.current;
+      if (!id) return;
+      api.getAgent(id)
+        .then((detail) => setSelected((prev) => (prev && prev.agent_id === id ? detail : prev)))
+        .catch(() => {});
+    }
 
     function connect() {
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
       setWsStatus('connecting');
 
-      ws.onopen  = () => setWsStatus('connected');
+      ws.onopen = () => {
+        setWsStatus('connected');
+        lastMessageAt = Date.now();
+        // 재연결이면 끊긴 동안 놓친 변경(목록·요약·이력·열린 상세)을 서버에서 다시 불러온다
+        if (hasConnected) {
+          loadInitial();
+          refreshSelected();
+        }
+        hasConnected = true;
+      };
       ws.onclose = () => {
         setWsStatus('disconnected');
-        reconnectTimer = setTimeout(connect, 3000);
+        if (!disposed) reconnectTimer = setTimeout(connect, WS_RECONNECT_DELAY_MS);
       };
       ws.onerror = () => ws.close();
 
       ws.onmessage = (e) => {
+        lastMessageAt = Date.now();
         try {
           const msg: WSMessage = JSON.parse(e.data);
+
+          // 연결 확인 신호·연결 확인 메시지는 수신 시각만 기록
+          if (msg.type === 'heartbeat' || msg.type === 'connected') return;
 
           // ── 요약 카드 즉시 갱신 ──
           if (msg.type === 'summary_update') {
@@ -131,9 +166,21 @@ export default function DashboardPage() {
       api.getSummary().then(setSummary).catch(() => {});
     }, 30_000);
 
+    // 무응답 감시: 서버는 15초마다 연결 확인 신호를 보낸다. 오래 아무 메시지도 없으면 연결이 멈춘 것으로 보고,
+    // 닫히기를 기다리지 않고 그 연결을 버린 뒤 바로 새로 연결한다 (새 연결에서 전체를 다시 불러옴)
+    const watchdogTimer = setInterval(() => {
+      const stale = wsRef.current;
+      if (!stale || stale.readyState !== WebSocket.OPEN || Date.now() - lastMessageAt < WS_SILENCE_LIMIT_MS) return;
+      stale.onopen = stale.onclose = stale.onerror = stale.onmessage = null;
+      stale.close();
+      connect();
+    }, 5_000);
+
     return () => {
+      disposed = true;
       clearTimeout(reconnectTimer);
       clearInterval(pollTimer);
+      clearInterval(watchdogTimer);
       wsRef.current?.close();
     };
   }, [loadInitial]);
