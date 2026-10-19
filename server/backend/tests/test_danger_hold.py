@@ -23,7 +23,7 @@ COOLDOWN = settings.on_screen_alert_cooldown_seconds
 
 @pytest.fixture(autouse=True)
 def _clear_memory():
-    stores = (agent_service._danger_holds, agent_service._on_screen_prev,
+    stores = (agent_service._danger_holds, agent_service._on_screen_since,
               agent_service._on_screen_alerted, agent_service._active_detections)
     for store in stores:
         store.clear()
@@ -112,6 +112,18 @@ def test_reason_falls_back_to_foreground_window():
     assert agent_service.get_danger_reason("A", at(1)) == "ChatGPT - Chrome"
 
 
+def test_danger_episode_since_and_last():
+    """이어진 DANGER 보고는 같은 구간(시작 시각 유지), 보고 간격보다 오래 끊긴 뒤의 DANGER는 새 구간"""
+    for s in (0, 3, 6):
+        agent_service.register_danger(report("danger", [det("chatgpt.com/c/1")]), at(s))
+    hold = agent_service.get_danger_hold("A", at(7))
+    assert (hold.since, hold.last_at) == (at(0), at(6))
+
+    agent_service.register_danger(report("danger", [det("chatgpt.com/c/1")]), at(30))  # 24초 뒤 다시 DANGER
+    hold = agent_service.get_danger_hold("A", at(31))
+    assert (hold.since, hold.last_at) == (at(30), at(30))
+
+
 def test_buffered_report_does_not_start_hold():
     """현재 탐지 목록이 없는 재전송 보고의 DANGER로는 유지를 시작하지 않음"""
     agent_service.register_danger(report("danger", with_detections=False), at(0))
@@ -149,6 +161,28 @@ def test_title_notification_count_change_is_same_window():
     assert total == 1
 
 
+def test_on_screen_since_kept_while_on_screen():
+    """화면 앞에 계속 떠 있는 동안은 처음 시각 유지, 내려가면 지우고 다시 나오면 그때부터"""
+    on, off = report("danger", [det("chatgpt.com/c/1")]), report("warning", [det("chatgpt.com/c/1", fg=False)])
+    key = ("BLOCKED_URL", "chatgpt.com/c/1")
+    for s in (0, 3, 6):
+        events_at(on, s)
+    assert agent_service._on_screen_since["A"] == {key: at(0)}
+    events_at(off, 9)
+    assert agent_service._on_screen_since["A"] == {}
+    events_at(on, 12)
+    assert agent_service._on_screen_since["A"] == {key: at(12)}
+
+
+def test_with_on_screen_since_fills_foreground_items_only():
+    events_at(report("danger", [det("(3) Instagram - Chrome", "MESSENGER_DETECTED", "title")]), 0)
+    items = [ActiveDetectionSchema(**det("(5) Instagram - Chrome", "MESSENGER_DETECTED", "title")),
+             ActiveDetectionSchema(**det("KakaoTalk.exe", "MESSENGER_DETECTED", "process", fg=False))]
+    filled = agent_service.with_on_screen_since("A", items)
+    # 알림 개수만 바뀐 같은 창은 처음 시각을 그대로 보여 줌, 뒤에 있는 항목은 비움
+    assert [d.on_screen_since for d in filled] == [at(0), None]
+
+
 def test_each_new_target_alerted():
     events_at(report("danger", [det("chatgpt.com/c/1")]), 0)
     events = events_at(
@@ -162,7 +196,7 @@ def test_find_does_not_change_state_until_marked():
     req = report("danger", [det("chatgpt.com/c/1")])
     assert len(agent_service.find_on_screen_events(req, at(0))) == 1
     assert len(agent_service.find_on_screen_events(req, at(3))) == 1  # 반영 전이라 다시 대상
-    assert "A" not in agent_service._on_screen_prev
+    assert "A" not in agent_service._on_screen_since
 
 
 def test_old_cooldown_records_pruned():
@@ -176,7 +210,7 @@ def test_buffered_report_ignored_for_events():
     """현재 탐지 목록 없는 보고는 알림을 만들지 않고 직전 화면 상태도 바꾸지 않음"""
     events_at(report("danger", [det("chatgpt.com/c/1")]), 0)
     assert events_at(report("danger", with_detections=False), 3) == []
-    assert agent_service._on_screen_prev["A"] == {("BLOCKED_URL", "chatgpt.com/c/1")}
+    assert set(agent_service._on_screen_since["A"]) == {("BLOCKED_URL", "chatgpt.com/c/1")}
 
 
 def test_on_screen_alert_fields():
@@ -203,7 +237,7 @@ def test_clear_danger_state():
     events_at(report("danger", [det("chatgpt.com/c/1")]), 0)
     agent_service.clear_danger_state("A")
     assert "A" not in agent_service._danger_holds
-    assert "A" not in agent_service._on_screen_prev and "A" not in agent_service._on_screen_alerted
+    assert "A" not in agent_service._on_screen_since and "A" not in agent_service._on_screen_alerted
 
 
 # ─── 보고 수신 · 대시보드 API ─────────────────────────────────────
@@ -223,9 +257,12 @@ async def test_report_flow_holds_danger_and_records_on_screen_alert(db, broadcas
     alerts = (await db.execute(select(AlertLogDB).where(AlertLogDB.code == "ON_SCREEN"))).scalars().all()
     assert [(a.level, a.message) for a in alerts] == [("danger", "차단 사이트 화면 표시: chatgpt.com/c/1")]
 
-    # 마지막 WS 업데이트도 DANGER와 이유를 담음
+    # 마지막 WS 업데이트도 DANGER와 이유, 구간 정보를 담음 (화면에서는 내렸으므로 danger_on_screen=False)
     last_update = [d for t, d in broadcasts if t == "agent_update"][-1]
     assert (last_update["current_state"], last_update["danger_reason"]) == ("danger", "chatgpt.com/c/1")
+    assert last_update["danger_on_screen"] is False
+    assert last_update["danger_since"] and last_update["danger_last_at"]
+    assert "T" in last_update["danger_since"]  # 브라우저가 해석할 수 있는 ISO 형식
 
     # 상단 요약(REST·WS)도 원래 상태 WARNING이 아니라 유지 중인 DANGER로 셈
     for summary in (await dashboard.get_summary(db), await agent_service.get_dashboard_summary(db)):
@@ -238,10 +275,12 @@ async def test_dashboard_shows_danger_reason(db, broadcasts):
     await agents.receive_report(report("danger", [det("claude.exe", "BLOCKED_PROCESS", "process")]), db)
 
     listed = await dashboard.list_agents(db)
-    assert [(a.current_state, a.danger_reason) for a in listed] == [("danger", "claude.exe")]
+    assert [(a.current_state, a.danger_reason, a.danger_on_screen) for a in listed] == [("danger", "claude.exe", True)]
     detail = await dashboard.get_agent_detail("A", db)
     assert detail.danger_reason == "claude.exe"
     assert detail.recent_alerts[0].level == "danger"
+    # 화면 앞 탐지 항목에는 화면에 뜬 시각이 채워짐
+    assert [d.on_screen_since is not None for d in detail.active_detections] == [True]
 
     assert (await dashboard.get_summary(db)).danger_count == 1
     assert (await agent_service.get_dashboard_summary(db)).danger_count == 1
@@ -302,7 +341,7 @@ async def test_offline_clears_danger_state(db, broadcasts):
     await agents.receive_report(report("danger", [det("chatgpt.com/c/1")]), db)
     await agents.receive_offline(AgentOfflineRequest(agent_id="A"), db)
 
-    assert "A" not in agent_service._danger_holds and "A" not in agent_service._on_screen_prev
+    assert "A" not in agent_service._danger_holds and "A" not in agent_service._on_screen_since
     agent = (await db.execute(select(Agent).where(Agent.agent_id == "A"))).scalar_one()
     assert agent_service.summarize_agent(agent).danger_reason is None
 

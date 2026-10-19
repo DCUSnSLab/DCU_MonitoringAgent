@@ -322,6 +322,10 @@ html, body {
   color: var(--danger);
   opacity: 0.8;
 }
+.agent-danger-reason .danger-duration {
+  font-weight: 500;
+  opacity: 0.85;
+}
 
 .agent-last-seen {
   font-size: 10px;

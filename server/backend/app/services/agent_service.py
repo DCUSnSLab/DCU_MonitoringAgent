@@ -7,7 +7,7 @@
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -80,8 +80,17 @@ _DETECTION_LABELS = {
     "BLOCKED_URL": "차단 사이트",
     "MESSENGER_DETECTED": "메신저",
 }
-_danger_holds: dict[str, tuple[datetime, str]] = {}  # agent_id → (유지 종료 시각, 이유)
-_on_screen_prev: dict[str, set[tuple[str, str]]] = {}  # agent_id → 직전 보고에서 화면 앞이던 (code, target)
+
+class _DangerHold(NamedTuple):
+    until: datetime  # 유지 종료 시각 (마지막 DANGER 보고 + danger_hold_seconds)
+    reason: str  # 화면 앞에 띄운 탐지 대상
+    since: datetime  # DANGER가 이어진 구간의 시작 시각
+    last_at: datetime  # 마지막 DANGER 보고 시각
+
+
+_danger_holds: dict[str, _DangerHold] = {}  # agent_id → DANGER 유지 정보
+# agent_id → 직전 보고에서 화면 앞이던 (code, target) → 그 대상이 화면 앞에 계속 떠 있기 시작한 시각
+_on_screen_since: dict[str, dict[tuple[str, str], datetime]] = {}
 _on_screen_alerted: dict[str, dict[tuple[str, str], datetime]] = {}  # agent_id → (code, target) → 마지막 알림 시각
 
 
@@ -105,20 +114,34 @@ def register_danger(req: StatusReportRequest, now: Optional[datetime] = None) ->
     """
     if req.user_state == "danger" and req.active_detections is not None:
         now = now or datetime.now(timezone.utc)
-        _danger_holds[req.agent_id] = (now + timedelta(seconds=settings.danger_hold_seconds), _danger_reason(req))
+        previous = _danger_holds.get(req.agent_id)
+        # 직전 DANGER 보고에 바로 이어지면(보고 간격 이내) 같은 구간으로 보고 시작 시각을 유지한다
+        continuing = previous is not None and now - previous.last_at <= timedelta(seconds=MAX_REPORT_GAP_SECONDS)
+        _danger_holds[req.agent_id] = _DangerHold(
+            until=now + timedelta(seconds=settings.danger_hold_seconds),
+            reason=_danger_reason(req),
+            since=previous.since if continuing else now,
+            last_at=now,
+        )
+
+
+def get_danger_hold(agent_id: str, now: Optional[datetime] = None) -> Optional[_DangerHold]:
+    """DANGER 유지 중이면 그 정보, 아니면 None."""
+    hold = _danger_holds.get(agent_id)
+    if hold is None or (now or datetime.now(timezone.utc)) >= hold.until:
+        return None
+    return hold
 
 
 def get_danger_reason(agent_id: str, now: Optional[datetime] = None) -> Optional[str]:
     """DANGER 유지 중이면 그 이유, 아니면 None."""
-    hold = _danger_holds.get(agent_id)
-    if hold is None or (now or datetime.now(timezone.utc)) >= hold[0]:
-        return None
-    return hold[1]
+    hold = get_danger_hold(agent_id, now)
+    return hold.reason if hold else None
 
 
 def display_state(agent: Agent, now: Optional[datetime] = None) -> str:
     """대시보드에 보일 상태: DANGER 유지 중이면 danger, 아니면 저장된 원래 상태."""
-    return "danger" if get_danger_reason(agent.agent_id, now) is not None else agent.current_state
+    return "danger" if get_danger_hold(agent.agent_id, now) is not None else agent.current_state
 
 
 def _on_screen_key(item: ActiveDetectionSchema) -> tuple[str, str]:
@@ -140,7 +163,7 @@ def find_on_screen_events(
         return []
     now = now or datetime.now(timezone.utc)
     cooldown = timedelta(seconds=settings.on_screen_alert_cooldown_seconds)
-    previous = _on_screen_prev.get(req.agent_id, set())
+    previous = set(_on_screen_since.get(req.agent_id, {}))
     alerted = _on_screen_alerted.get(req.agent_id, {})
 
     events: list[ActiveDetectionSchema] = []
@@ -162,13 +185,15 @@ def find_on_screen_events(
 def mark_on_screen_state(
     req: StatusReportRequest, events: list[ActiveDetectionSchema], now: Optional[datetime] = None
 ) -> None:
-    """화면 표시 알림 저장이 확정된 뒤, 직전 화면 상태와 알림 시각을 반영한다."""
+    """화면 표시 알림 저장이 확정된 뒤, 화면 앞 대상(과 그 시작 시각)과 알림 시각을 반영한다."""
     if req.active_detections is None:
         return
     now = now or datetime.now(timezone.utc)
-    _on_screen_prev[req.agent_id] = {
-        _on_screen_key(d) for d in req.active_detections if d.is_foreground and d.target
-    }
+    current = {_on_screen_key(d) for d in req.active_detections if d.is_foreground and d.target}
+    previous = _on_screen_since.get(req.agent_id, {})
+    # 계속 화면 앞인 대상은 처음 시각을 유지하고, 새로 나온 대상은 지금부터, 내려간 대상은 지운다
+    _on_screen_since[req.agent_id] = {key: previous.get(key, now) for key in current}
+
     cooldown = timedelta(seconds=settings.on_screen_alert_cooldown_seconds)
     alerted = _on_screen_alerted.setdefault(req.agent_id, {})
     for key in [k for k, t in alerted.items() if now - t >= cooldown]:
@@ -193,8 +218,17 @@ def on_screen_alert(item: ActiveDetectionSchema, detected_at: datetime) -> Alert
 def clear_danger_state(agent_id: str) -> None:
     """에이전트의 DANGER 유지·화면 표시 기록을 비운다 (오프라인 등)."""
     _danger_holds.pop(agent_id, None)
-    _on_screen_prev.pop(agent_id, None)
+    _on_screen_since.pop(agent_id, None)
     _on_screen_alerted.pop(agent_id, None)
+
+
+def with_on_screen_since(agent_id: str, items: list[ActiveDetectionSchema]) -> list[ActiveDetectionSchema]:
+    """현재 탐지 목록의 화면 앞 항목에 '화면에 계속 떠 있기 시작한 시각'을 채운 사본."""
+    since = _on_screen_since.get(agent_id, {})
+    return [
+        d.model_copy(update={"on_screen_since": since.get(_on_screen_key(d))}) if d.is_foreground else d
+        for d in items
+    ]
 
 
 def alert_for_broadcast(alert: AlertSchema, now: datetime) -> dict:
@@ -211,10 +245,14 @@ def alert_for_broadcast(alert: AlertSchema, now: datetime) -> dict:
 def summarize_agent(agent: Agent, now: Optional[datetime] = None) -> AgentSummary:
     """에이전트 행 → 대시보드 카드 요약 (DANGER 유지 중이면 DANGER와 그 이유)."""
     summary = AgentSummary.model_validate(agent)
-    reason = get_danger_reason(agent.agent_id, now)
-    if reason is not None:
+    hold = get_danger_hold(agent.agent_id, now)
+    if hold is not None:
         summary.current_state = "danger"
-        summary.danger_reason = reason
+        summary.danger_reason = hold.reason
+        summary.danger_since = hold.since
+        summary.danger_last_at = hold.last_at
+        # 저장된 원래 상태가 DANGER면 아직 화면에 떠 있는 중 (아니면 내린 뒤 유지 중)
+        summary.danger_on_screen = agent.current_state == "danger"
     return summary
 
 

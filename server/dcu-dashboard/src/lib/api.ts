@@ -19,6 +19,9 @@ export interface AgentSummary {
   agent_version?: string | null;
   os_version?: string | null;
   danger_reason?: string | null; // DANGER일 때 화면 앞에 띄운 탐지 대상 (DANGER 유지 시간 동안 함께 유지)
+  danger_since?: string | null; // DANGER가 이어진 구간의 시작 시각
+  danger_last_at?: string | null; // 마지막 DANGER 보고 시각
+  danger_on_screen?: boolean; // 지금도 화면에 떠 있는지 (false면 내린 뒤 유지 중)
 }
 
 export interface ProcessInfo {
@@ -51,6 +54,7 @@ export interface ActiveDetection {
   target: string; // 프로세스명 / URL / 창 제목
   source: string; // process | url | title
   is_foreground: boolean; // 지금 화면에 띄워져 있는지
+  on_screen_since?: string | null; // 화면 앞에 계속 떠 있기 시작한 시각 (화면 앞일 때만)
 }
 
 export interface AgentDetail extends AgentSummary {

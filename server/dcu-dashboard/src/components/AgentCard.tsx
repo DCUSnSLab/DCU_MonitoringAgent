@@ -1,6 +1,7 @@
 'use client';
 
 import { AgentSummary } from '@/lib/api';
+import { DangerDuration } from './OnScreenTime';
 import StatusBadge from './StatusBadge';
 
 interface Props {
@@ -44,6 +45,9 @@ export default function AgentCard({ agent, onClick }: Props) {
         <div className="agent-foreground agent-danger-reason" title={agent.danger_reason}>
           <span className="fg-label">화면 표시</span>
           {agent.danger_reason}
+          {agent.danger_since && (
+            <span className="danger-duration"> · <DangerDuration agent={agent} compact /></span>
+          )}
         </div>
       )}
 

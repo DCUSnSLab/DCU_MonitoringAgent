@@ -1,6 +1,7 @@
 'use client';
 
 import { ActiveDetection, AgentDetail } from '@/lib/api';
+import { DangerDuration, OnScreenElapsed } from './OnScreenTime';
 import RecentAlerts from './RecentAlerts';
 import StatusBadge from './StatusBadge';
 
@@ -60,6 +61,11 @@ export default function AgentModal({ agent, onClose }: Props) {
               overflowWrap: 'anywhere',
             }}>
               화면 표시: {agent.danger_reason}
+              {agent.danger_since && (
+                <div style={{ fontSize: 11, fontWeight: 500, marginTop: 2, opacity: 0.85 }}>
+                  <DangerDuration agent={agent} />
+                </div>
+              )}
             </div>
           )}
 
@@ -120,7 +126,7 @@ export default function AgentModal({ agent, onClose }: Props) {
                         </span>
                         {d.is_foreground && (
                           <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--danger)', flexShrink: 0 }}>
-                            화면 표시 중
+                            화면 표시 중{d.on_screen_since && <> · <OnScreenElapsed since={d.on_screen_since} /></>}
                           </span>
                         )}
                       </div>

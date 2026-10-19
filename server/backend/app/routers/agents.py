@@ -105,7 +105,8 @@ async def receive_report(
     summary = await agent_service.get_agent_summary(db, req.agent_id)
     if summary:
         update = {
-            **summary.model_dump(),
+            # 시각 필드(DANGER 구간 등)를 브라우저가 그대로 해석하도록 ISO 형식으로 직렬화
+            **summary.model_dump(mode="json"),
             "processes": [p.model_dump() for p in req.processes[:20]],
             "chrome_tabs": [t.model_dump() for t in req.browser_details.chrome.tabs],
             # 실시간 보고의 새 알림(화면 표시 알림 포함)을 보내 열린 상세 모달의 최근 알림에 바로 붙인다.
@@ -117,7 +118,10 @@ async def receive_report(
         }
         # 현재 탐지 목록이 담긴 보고일 때만 전달 (없으면 대시보드의 기존 목록 유지)
         if req.active_detections is not None:
-            update["active_detections"] = [d.model_dump() for d in req.active_detections]
+            update["active_detections"] = [
+                d.model_dump(mode="json")
+                for d in agent_service.with_on_screen_since(req.agent_id, req.active_detections)
+            ]
         await ws_manager.broadcast("agent_update", update)
 
     # 전체 요약 통계도 실시간 브로드캐스트 (헤더 카드 즉시 갱신용)
