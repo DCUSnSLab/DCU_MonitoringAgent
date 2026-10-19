@@ -1,6 +1,7 @@
 'use client';
 
 import { ActiveDetection, AgentDetail } from '@/lib/api';
+import RecentAlerts from './RecentAlerts';
 import StatusBadge from './StatusBadge';
 
 interface Props {
@@ -145,32 +146,8 @@ export default function AgentModal({ agent, onClose }: Props) {
             </>
           )}
 
-          {/* 최근 알림 */}
-          {agent.recent_alerts.length > 0 && (
-            <>
-              <div className="modal-section-title" style={{ color: 'var(--warning)' }}>
-                최근 알림 ({agent.recent_alerts.length}건)
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {agent.recent_alerts.slice(0, 15).map((a, i) => (
-                  <div key={i} style={{
-                    background: 'var(--bg-elevated)',
-                    borderRadius: 'var(--radius-sm)',
-                    padding: '8px 12px',
-                    borderLeft: `2px solid ${a.level === 'warning' ? 'var(--warning)' : 'var(--danger)'}`,
-                    fontSize: 12,
-                  }}>
-                    <div style={{ color: 'var(--text-primary)', marginBottom: 2 }}>{a.message}</div>
-                    {a.detected_at && (
-                      <div style={{ color: 'var(--text-muted)' }}>
-                        {new Date(a.detected_at).toLocaleString('ko-KR')}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
+          {/* 최근 알림 (프로그램·종류별 필터) */}
+          {agent.recent_alerts.length > 0 && <RecentAlerts alerts={agent.recent_alerts} />}
 
           {/* 프로세스 목록 */}
           {agent.processes.length > 0 && (
