@@ -29,8 +29,8 @@ class FakeWebSocket:
         self.stall = stall
         self.closed_with = None
 
-    async def accept(self):
-        pass
+    async def accept(self, subprotocol=None):
+        self.subprotocol = subprotocol
 
     async def send_text(self, text: str):
         if self.fail:

@@ -37,6 +37,15 @@ class Settings(BaseSettings):
     # 같은 대상을 화면에 다시 띄워도 '화면 표시' 알림은 이 간격(초)에 한 번만 남긴다.
     on_screen_alert_cooldown_seconds: int = 60
 
+    # 대시보드 관리자 로그인. 비밀번호는 코드에 두지 않는다(공개 저장소) — 운영은 K8s Secret 으로 넣는다.
+    # 비밀번호가 비어 있으면 로그인할 수 없고 대시보드·통계 API도 쓸 수 없다.
+    dashboard_admin_username: str = "admin"
+    dashboard_admin_password: str = ""
+    # 로그인 토큰 서명 비밀값. 비어 있으면 서버가 켜질 때마다 새로 만든다(서버 재시작 시 다시 로그인).
+    dashboard_token_secret: str = ""
+    # 로그인 유지 시간(시간)
+    dashboard_token_ttl_hours: int = 12
+
     class Config:
         env_file = ".env"
 
