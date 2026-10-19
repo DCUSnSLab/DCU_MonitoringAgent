@@ -122,6 +122,21 @@ async def test_pending_updates_merged_per_agent(manager):
     assert ws.sent[2]["data"] == {"danger_count": 1}
 
 
+async def test_merged_message_keeps_queue_position(manager):
+    """합친 메시지는 처음 들어온 자리를 유지 (뒤처진 대시보드에서도 요약이 뒤로 밀려 굶지 않도록)"""
+    ws = FakeWebSocket()
+    await manager.connect(ws)
+    manager.publish("agent_update", {"agent_id": "A"})
+    manager.publish("summary_update", {"danger_count": 0})
+    manager.publish("agent_update", {"agent_id": "B"})
+    manager.publish("summary_update", {"danger_count": 1})  # 이미 있는 요약 → 자리 유지, 내용만 최신
+    await settle()
+
+    assert types(ws) == ["connected", "agent_update", "summary_update", "agent_update"]
+    assert ws.sent[2]["data"] == {"danger_count": 1}
+    assert ws.sent[3]["data"]["agent_id"] == "B"
+
+
 async def test_failed_dashboard_dropped_others_unaffected(manager):
     """보내기에 실패한 대시보드만 목록에서 빠지고 종료 신호(1013)를 받음, 다른 대시보드는 계속 받음"""
     good, bad = FakeWebSocket(), FakeWebSocket(fail=True)

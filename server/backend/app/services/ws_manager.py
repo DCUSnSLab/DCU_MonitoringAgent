@@ -75,7 +75,9 @@ class _DashboardClient:
             self._seq += 1
             key = ("seq", self._seq)
         elif key in self._pending:
-            message = _merge(self._pending.pop(key), message)
+            # 기존 자리를 유지한 채 내용만 최신으로 바꾼다. 맨 뒤로 옮기면 1초마다 다시 들어오는 요약이
+            # 뒤처진 대시보드에서 계속 뒤로 밀려 영영 보내지지 않는다.
+            message = _merge(self._pending[key], message)
         self._pending[key] = message
         self._ready.set()
         return len(self._pending) <= MAX_PENDING
