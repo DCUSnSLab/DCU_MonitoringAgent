@@ -68,7 +68,7 @@ async def list_agents(db: AsyncSession = Depends(get_db)):
     """
     result = await db.execute(select(Agent).order_by(Agent.registered_at))
     agents = result.scalars().all()
-    return [AgentSummary.model_validate(a) for a in agents]
+    return [agent_service.summarize_agent(a) for a in agents]
 
 
 @router.get("/agents/{agent_id}", response_model=AgentDetail)

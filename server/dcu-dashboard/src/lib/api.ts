@@ -18,6 +18,7 @@ export interface AgentSummary {
   memory_percent: number;
   agent_version?: string | null;
   os_version?: string | null;
+  danger_reason?: string | null; // DANGER일 때 화면 앞에 띄운 탐지 대상 (DANGER 유지 시간 동안 함께 유지)
 }
 
 export interface ProcessInfo {

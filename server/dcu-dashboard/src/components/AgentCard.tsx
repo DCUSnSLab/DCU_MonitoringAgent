@@ -40,6 +40,13 @@ export default function AgentCard({ agent, onClick }: Props) {
         <StatusBadge state={state} size="sm" />
       </div>
 
+      {state === 'danger' && agent.danger_reason && (
+        <div className="agent-foreground agent-danger-reason" title={agent.danger_reason}>
+          <span className="fg-label">화면 표시</span>
+          {agent.danger_reason}
+        </div>
+      )}
+
       {agent.foreground_window && agent.is_online && (
         <div className="agent-foreground">
           <span className="fg-label">활성창</span>

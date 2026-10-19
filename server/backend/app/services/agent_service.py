@@ -17,6 +17,7 @@ from app.schemas import (
     ActiveDetectionSchema,
     AgentRegisterRequest,
     AgentSummary,
+    AlertSchema,
     DashboardSummary,
     StatusReportRequest,
 )
@@ -62,6 +63,119 @@ def get_active_detections(
 def clear_active_detections(agent_id: str) -> None:
     """에이전트의 현재 탐지 목록을 비운다 (명시적 오프라인 등)."""
     _active_detections.pop(agent_id, None)
+
+
+# ─── DANGER 유지 · 화면 표시 알림 (메모리 보관) ────────────────────
+# DANGER(차단 대상이 화면 맨 앞)는 학생이 잠깐 띄웠다 내리면 수집 주기 하나만 잡혀 대시보드에서 놓치기 쉽다.
+# 마지막 DANGER 보고 후 settings.danger_hold_seconds 동안 DANGER와 그 이유를 유지하고,
+# 차단 대상이 화면 앞으로 나온 순간은 빨간 '화면 표시' 알림(level=danger)으로 남긴다.
+# 현재 탐지 목록과 같은 이유로 메모리에만 둔다 (재시작 시 유지 중인 DANGER 10초 정도만 사라짐).
+ON_SCREEN_ALERT_CODE = "ON_SCREEN"
+_DETECTION_LABELS = {
+    "BLOCKED_PROCESS": "차단 프로그램",
+    "UNAUTHORIZED_PROCESS": "허용되지 않은 프로그램",
+    "BLOCKED_URL": "차단 사이트",
+    "MESSENGER_DETECTED": "메신저",
+}
+_danger_holds: dict[str, tuple[datetime, str]] = {}  # agent_id → (유지 종료 시각, 이유)
+_on_screen_prev: dict[str, set[tuple[str, str]]] = {}  # agent_id → 직전 보고에서 화면 앞이던 (code, target)
+_on_screen_alerted: dict[str, dict[tuple[str, str], datetime]] = {}  # agent_id → (code, target) → 마지막 알림 시각
+
+
+def _danger_reason(req: StatusReportRequest) -> str:
+    """DANGER 이유: 화면 앞에 떠 있던 탐지 대상 (없으면 포그라운드 창 제목)."""
+    on_screen = [d.target for d in (req.active_detections or []) if d.is_foreground and d.target]
+    if on_screen:
+        reason = ", ".join(on_screen[:2])
+        return reason + (f" 외 {len(on_screen) - 2}건" if len(on_screen) > 2 else "")
+    # 화면 앞 탐지 항목을 특정하지 못한 경우
+    return req.foreground_window or "차단 대상 화면 표시"
+
+
+def apply_danger_hold(
+    req: StatusReportRequest, now: Optional[datetime] = None
+) -> tuple[str, Optional[str]]:
+    """보고 상태에 DANGER 유지를 적용한 (대시보드에 보일 상태, DANGER 이유)를 반환한다.
+
+    유지는 현재 탐지 목록이 담긴 실시간 보고에서만 시작한다. 오프라인 버퍼에서 재전송된
+    과거 보고(목록 없음)의 DANGER로 지금 PC를 다시 DANGER로 유지하지 않기 위함이다.
+    """
+    now = now or datetime.now(timezone.utc)
+    if req.user_state == "danger" and req.active_detections is not None:
+        reason = _danger_reason(req)
+        _danger_holds[req.agent_id] = (now + timedelta(seconds=settings.danger_hold_seconds), reason)
+        return "danger", reason
+
+    hold = _danger_holds.get(req.agent_id)
+    if hold is not None and now < hold[0]:
+        return "danger", hold[1]
+    _danger_holds.pop(req.agent_id, None)
+    return req.user_state, None
+
+
+def get_danger_reason(agent_id: str, now: Optional[datetime] = None) -> Optional[str]:
+    """DANGER 이유 (유지 시간이 지났으면 None)."""
+    hold = _danger_holds.get(agent_id)
+    if hold is None or (now or datetime.now(timezone.utc)) >= hold[0]:
+        return None
+    return hold[1]
+
+
+def take_on_screen_events(
+    req: StatusReportRequest, now: Optional[datetime] = None
+) -> list[ActiveDetectionSchema]:
+    """이번 보고에서 새로 화면 앞으로 나온 탐지 항목 (화면 표시 알림을 남길 대상).
+
+    직전 보고에서도 화면 앞이던 대상은 제외하고, 같은 대상은 쿨다운 동안 한 번만 돌려준다.
+    현재 탐지 목록이 없는 보고(구버전 에이전트·오프라인 버퍼 재전송)는 판단하지 않고 상태도 바꾸지 않는다.
+    """
+    if req.active_detections is None:
+        return []
+    now = now or datetime.now(timezone.utc)
+    on_screen = {(d.code, d.target): d for d in req.active_detections if d.is_foreground and d.target}
+    previous = _on_screen_prev.get(req.agent_id, set())
+    _on_screen_prev[req.agent_id] = set(on_screen)
+
+    cooldown = timedelta(seconds=settings.on_screen_alert_cooldown_seconds)
+    alerted = _on_screen_alerted.setdefault(req.agent_id, {})
+    for key in [k for k, t in alerted.items() if now - t >= cooldown]:
+        del alerted[key]  # 쿨다운이 지난 기록 정리 (대화마다 바뀌는 URL 등으로 계속 쌓이지 않게)
+
+    events = []
+    for key in sorted(set(on_screen) - previous):
+        if key in alerted:
+            continue
+        alerted[key] = now
+        events.append(on_screen[key])
+    return events
+
+
+def on_screen_alert(item: ActiveDetectionSchema, detected_at: datetime) -> AlertSchema:
+    """화면 표시 알림 1건 (대시보드 최근 알림에서 빨간색으로 보이도록 level=danger)."""
+    label = _DETECTION_LABELS.get(item.code, "탐지 대상")
+    return AlertSchema(
+        level="danger",
+        code=ON_SCREEN_ALERT_CODE,
+        message=f"{label} 화면 표시: {item.target}",
+        process_name=item.target if item.source == "process" else None,
+        url=item.target if item.source == "url" else None,
+        detected_at=detected_at,
+    )
+
+
+def clear_danger_state(agent_id: str) -> None:
+    """에이전트의 DANGER 유지·화면 표시 기록을 비운다 (오프라인 등)."""
+    _danger_holds.pop(agent_id, None)
+    _on_screen_prev.pop(agent_id, None)
+    _on_screen_alerted.pop(agent_id, None)
+
+
+def summarize_agent(agent: Agent) -> AgentSummary:
+    """에이전트 행 → 대시보드 카드 요약 (DANGER면 그 이유 포함)."""
+    summary = AgentSummary.model_validate(agent)
+    if agent.current_state == "danger":
+        summary.danger_reason = get_danger_reason(agent.agent_id)
+    return summary
 
 
 async def upsert_agent(db: AsyncSession, req: AgentRegisterRequest) -> Agent:
@@ -115,8 +229,19 @@ async def upsert_agent(db: AsyncSession, req: AgentRegisterRequest) -> Agent:
 
 
 
-async def save_status_report(db: AsyncSession, req: StatusReportRequest) -> StatusReportDB:
-    """상태 보고서를 DB에 저장하고 에이전트 현재 상태를 업데이트합니다."""
+async def save_status_report(
+    db: AsyncSession,
+    req: StatusReportRequest,
+    current_state: Optional[str] = None,
+    extra_alerts: Optional[list[AlertSchema]] = None,
+) -> StatusReportDB:
+    """상태 보고서를 DB에 저장하고 에이전트 현재 상태를 업데이트합니다.
+
+    Args:
+        current_state: 대시보드에 보일 상태 (DANGER 유지 적용). 없으면 보고 상태 그대로.
+            보고서 기록(status_reports.user_state)에는 에이전트가 보낸 원래 상태를 남긴다.
+        extra_alerts: 서버에서 만든 알림 (화면 표시 알림 등)
+    """
     chrome = req.browser_details.chrome
     now = datetime.now(timezone.utc)
 
@@ -136,7 +261,7 @@ async def save_status_report(db: AsyncSession, req: StatusReportRequest) -> Stat
     await db.flush()  # report.id 생성
 
     # 알림 저장
-    for alert in req.alerts:
+    for alert in [*req.alerts, *(extra_alerts or [])]:
         alert_log = AlertLogDB(
             report_id=report.id,
             agent_id=req.agent_id,
@@ -151,7 +276,7 @@ async def save_status_report(db: AsyncSession, req: StatusReportRequest) -> Stat
 
     # 에이전트 현재 상태 캐시 업데이트 (+ 대시보드용 최신 보고서 요약 비정규화)
     update_values = {
-        "current_state": req.user_state,
+        "current_state": current_state or req.user_state,
         "last_seen_at": now,
         "is_online": True,
         # 최신 보고서 요약 — 대시보드 목록이 이 값만 읽으면 되도록 여기서 함께 갱신
@@ -194,7 +319,7 @@ async def get_agent_summary(db: AsyncSession, agent_id: str) -> Optional[AgentSu
     if not agent:
         return None
 
-    return AgentSummary.model_validate(agent)
+    return summarize_agent(agent)
 
 
 async def get_dashboard_summary(db: AsyncSession) -> DashboardSummary:

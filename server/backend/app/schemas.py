@@ -117,6 +117,8 @@ class AgentSummary(BaseModel):
     memory_percent: float = 0.0
     agent_version: Optional[str] = None
     os_version: Optional[str] = None
+    # DANGER일 때 그 이유 (화면 앞에 띄운 탐지 대상). DANGER 유지 시간 동안 함께 유지된다.
+    danger_reason: Optional[str] = None
 
     class Config:
         from_attributes = True

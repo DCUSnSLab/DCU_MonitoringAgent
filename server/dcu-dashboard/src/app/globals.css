@@ -312,6 +312,16 @@ html, body {
   color: var(--text-muted);
   margin-right: 4px;
 }
+/* DANGER 이유: 화면 앞에 띄운 차단 대상 */
+.agent-danger-reason {
+  color: var(--danger);
+  font-weight: 600;
+  border-left: 2px solid var(--danger);
+}
+.agent-danger-reason .fg-label {
+  color: var(--danger);
+  opacity: 0.8;
+}
 
 .agent-last-seen {
   font-size: 10px;

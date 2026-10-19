@@ -45,6 +45,22 @@ export default function AgentModal({ agent, onClose }: Props) {
         </div>
 
         <div className="modal-body">
+          {/* DANGER 이유 */}
+          {state === 'danger' && agent.danger_reason && (
+            <div style={{
+              background: 'var(--bg-elevated)',
+              borderRadius: 'var(--radius-sm)',
+              borderLeft: '2px solid var(--danger)',
+              padding: '8px 12px',
+              marginBottom: 16,
+              fontSize: 13,
+              color: 'var(--danger)',
+              fontWeight: 600,
+            }}>
+              화면 표시: {agent.danger_reason}
+            </div>
+          )}
+
           {/* 기본 정보 */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
             {[

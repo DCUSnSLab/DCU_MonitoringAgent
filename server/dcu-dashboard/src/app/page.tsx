@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AgentDetail, AgentSummary, AlertLog, DashboardSummary, WSMessage, WS_URL, api } from '@/lib/api';
+import { AgentDetail, AgentSummary, AlertInfo, AlertLog, DashboardSummary, WSMessage, WS_URL, api } from '@/lib/api';
 import AgentCard from '@/components/AgentCard';
 import AgentModal from '@/components/AgentModal';
 import Header from '@/components/Header';
@@ -67,9 +67,15 @@ export default function DashboardPage() {
               return [...prev, updated];
             });
             // 모달이 열린 상태라면 실시간 업데이트
+            // (이번 보고의 새 알림은 최근 알림 맨 위에 붙인다 — 빨간 '화면 표시' 알림 포함)
+            const newAlerts = (msg.data as { alerts?: AlertInfo[] }).alerts ?? [];
             setSelected((prev) => {
               if (prev && prev.agent_id === updated.agent_id) {
-                return { ...prev, ...updated } as AgentDetail;
+                const merged = { ...prev, ...updated } as AgentDetail;
+                if (newAlerts.length > 0) {
+                  merged.recent_alerts = [...newAlerts, ...prev.recent_alerts].slice(0, 50);
+                }
+                return merged;
               }
               return prev;
             });
