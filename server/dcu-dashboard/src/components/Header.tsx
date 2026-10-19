@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { clearSession, useSession } from '@/lib/auth';
 
 const TABS = [
   { href: '/', label: '대시보드' },
@@ -10,6 +11,7 @@ const TABS = [
 
 export default function Header({ children }: { children?: React.ReactNode }) {
   const pathname = usePathname();
+  const session = useSession();
 
   return (
     <header className="header">
@@ -33,7 +35,18 @@ export default function Header({ children }: { children?: React.ReactNode }) {
           })}
         </nav>
       </div>
-      <div className="header-right">{children}</div>
+      <div className="header-right">
+        {children}
+        {session && (
+          <div className="header-user">
+            <span>{session.username}</span>
+            {/* 로그인 정보를 지우면 로그인 화면으로 이동 (AuthGate) */}
+            <button type="button" className="logout-btn" onClick={clearSession}>
+              로그아웃
+            </button>
+          </div>
+        )}
+      </div>
     </header>
   );
 }

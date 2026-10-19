@@ -1,5 +1,7 @@
 // API 타입 정의 및 클라이언트 함수
 
+import { Session, clearSession, getToken } from './auth';
+
 export type UserState = 'safe' | 'warning' | 'danger' | 'unknown';
 
 export interface AgentSummary {
@@ -162,9 +164,39 @@ export interface BlockedSiteDetail {
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
 async function apiFetch<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { cache: 'no-store' });
+  const token = getToken();
+  const res = await fetch(`${BASE}${path}`, {
+    cache: 'no-store',
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+  // 로그인이 만료·거부됨 → 로그인 정보를 지우면 로그인 화면으로 이동
+  if (res.status === 401) clearSession();
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
+}
+
+/** 로그인 실패 (화면에 보여 줄 메시지) */
+export class LoginError extends Error {}
+
+/** 관리자 로그인 → 성공하면 로그인 정보 반환 */
+export async function login(username: string, password: string): Promise<Session> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/api/auth/login`, {
+      method: 'POST',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+  } catch {
+    throw new LoginError('서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.');
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = typeof body?.detail === 'string' ? body.detail : null;
+    throw new LoginError(detail ?? `로그인에 실패했습니다 (${res.status})`);
+  }
+  return { token: body.token, username: body.username, expiresAt: new Date(body.expires_at).getTime() };
 }
 
 function statQuery(f: StatFilters): string {
@@ -197,3 +229,8 @@ export const api = {
 
 export const WS_URL =
   (process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:8000') + '/ws/dashboard';
+
+// 실시간 연결에 로그인 토큰을 싣는 하위 프로토콜 (서버가 'bearer' 로 응답)
+export const wsProtocols = (token: string) => ['bearer', token];
+// 서버가 로그인이 필요하다며 실시간 연결을 닫을 때의 종료 코드
+export const WS_CLOSE_UNAUTHORIZED = 4401;
