@@ -7,21 +7,26 @@ publish 는 대기열에 넣고 바로 돌아오고, 대시보드별 전송 담�
 import asyncio
 import inspect
 import json
+from types import SimpleNamespace
 
 import pytest
 
+from app import main
 from app.routers import agents
-from app.schemas import AgentOfflineRequest, AgentRegisterRequest
+from app.schemas import AgentOfflineRequest, AgentRegisterRequest, StatusReportRequest
+from app.services import agent_service
 from app.services import ws_manager as ws_module
 from app.services.ws_manager import WSManager, _coalesce_key, _merge
 
 
 class FakeWebSocket:
-    """보낸 메시지를 기록하는 가짜 대시보드 연결. fail=True면 보내기에서 오류."""
+    """보낸 메시지를 기록하는 가짜 대시보드 연결.
+    fail=True면 보내기에서 오류, stall=True면 보내기·닫기가 끝나지 않음(데이터를 받아 가지 않는 대시보드)."""
 
-    def __init__(self, fail: bool = False):
+    def __init__(self, fail: bool = False, stall: bool = False):
         self.sent: list[dict] = []
         self.fail = fail
+        self.stall = stall
         self.closed_with = None
 
     async def accept(self):
@@ -30,9 +35,13 @@ class FakeWebSocket:
     async def send_text(self, text: str):
         if self.fail:
             raise RuntimeError("connection closed")
+        if self.stall:
+            await asyncio.Event().wait()
         self.sent.append(json.loads(text))
 
     async def close(self, code: int = 1000):
+        if self.stall:
+            await asyncio.Event().wait()
         self.closed_with = code
 
 
@@ -154,6 +163,22 @@ async def test_failed_dashboard_dropped_others_unaffected(manager):
     assert types(good) == ["connected", "agent_update"]
 
 
+async def test_stalled_dashboard_dropped_after_send_timeout(manager, monkeypatch):
+    """보내기가 끝나지 않는 대시보드는 시간 제한 뒤 그것만 끊고, 다른 대시보드는 계속 받음"""
+    monkeypatch.setattr(ws_module, "SEND_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(ws_module, "CLOSE_TIMEOUT_SECONDS", 0.05)
+    stalled, healthy = FakeWebSocket(stall=True), FakeWebSocket()
+    await manager.connect(stalled)
+    await manager.connect(healthy)
+    await asyncio.sleep(0.2)
+    assert manager.connection_count == 1
+    assert not manager._closing  # 종료 신호도 막히면 제한 시간 뒤 포기
+
+    manager.publish("agent_update", {"agent_id": "A"})
+    await settle()
+    assert types(healthy) == ["connected", "agent_update"]
+
+
 async def test_queue_overflow_drops_dashboard(manager, monkeypatch):
     """대기열이 상한을 넘으면 그 대시보드를 끊음 (재연결해서 전체를 다시 불러오도록)"""
     monkeypatch.setattr(ws_module, "MAX_PENDING", 3)
@@ -203,3 +228,61 @@ async def test_register_and_offline_notify_after_commit(db, monkeypatch):
 
     # in_transaction()=False: 확정(commit)이 끝나 아직 확정되지 않은 변경이 없음
     assert calls == [("agent_online", False), ("summary", False), ("agent_offline", False), ("summary", False)]
+
+
+async def test_report_not_blocked_by_stalled_dashboard(db, manager, monkeypatch):
+    """받아 가지 않는 대시보드가 연결돼 있어도 보고 처리는 전송을 기다리지 않고 끝남"""
+    monkeypatch.setattr(agents, "ws_manager", manager)
+    stalled, healthy = FakeWebSocket(stall=True), FakeWebSocket()
+    await manager.connect(stalled)
+    await manager.connect(healthy)
+    req = StatusReportRequest(agent_id="A", hostname="PC-521-01", user_state="safe", alerts=[], active_detections=[])
+    try:
+        for _ in range(3):
+            await asyncio.wait_for(agents.receive_report(req, db), 2)
+        await settle()
+        assert "agent_update" in types(healthy)
+    finally:
+        agent_service.clear_active_detections("A")
+        agent_service.clear_danger_state("A")
+
+
+# ─── 요약·연결 확인 신호 주기 전송 ────────────────────────────────
+
+async def test_dashboard_pusher(manager, monkeypatch):
+    """요약은 요청이 있을 때만 1번 계산(대시보드가 없으면 DB 조회 안 함), 연결 확인 신호는 주기적으로 보냄"""
+    computed = []
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    async def fake_summary(db):
+        computed.append(db)
+        return SimpleNamespace(model_dump=lambda mode: {"danger_count": len(computed)})
+
+    monkeypatch.setattr(main, "ws_manager", manager)
+    monkeypatch.setattr(main, "AsyncSessionLocal", FakeSession)
+    monkeypatch.setattr(main.agent_service, "get_dashboard_summary", fake_summary)
+    monkeypatch.setattr(main, "DASHBOARD_SUMMARY_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(main, "DASHBOARD_HEARTBEAT_SECONDS", 0.1)
+    pusher = asyncio.create_task(main._dashboard_pusher())
+    try:
+        manager.request_summary()  # 연결된 대시보드 없음 → 계산하지 않음
+        await asyncio.sleep(0.05)
+        assert computed == []
+
+        ws = FakeWebSocket()
+        await manager.connect(ws)
+        manager.request_summary()
+        manager.request_summary()  # 요청이 여러 번이어도 계산은 1번
+        await asyncio.sleep(0.3)
+        assert len(computed) == 1
+        assert [m["data"] for m in ws.sent if m["type"] == "summary_update"] == [{"danger_count": 1}]
+        assert "heartbeat" in types(ws)
+    finally:
+        pusher.cancel()
+        await asyncio.gather(pusher, return_exceptions=True)
