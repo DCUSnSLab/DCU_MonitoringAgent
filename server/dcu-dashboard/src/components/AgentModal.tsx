@@ -56,6 +56,7 @@ export default function AgentModal({ agent, onClose }: Props) {
               fontSize: 13,
               color: 'var(--danger)',
               fontWeight: 600,
+              overflowWrap: 'anywhere',
             }}>
               화면 표시: {agent.danger_reason}
             </div>

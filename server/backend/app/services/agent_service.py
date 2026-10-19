@@ -5,6 +5,7 @@
 """
 
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
@@ -71,6 +72,8 @@ def clear_active_detections(agent_id: str) -> None:
 # 차단 대상이 화면 앞으로 나온 순간은 빨간 '화면 표시' 알림(level=danger)으로 남긴다.
 # 현재 탐지 목록과 같은 이유로 메모리에만 둔다 (재시작 시 유지 중인 DANGER 10초 정도만 사라짐).
 ON_SCREEN_ALERT_CODE = "ON_SCREEN"
+# 창 제목 앞의 알림 개수 표시 "(3) " — 수시로 바뀌므로 같은 창 판정에서 뗀다 (에이전트와 같은 규칙)
+_NOTIFICATION_PREFIX = re.compile(r"^\(\d+\+?\)\s*")
 _DETECTION_LABELS = {
     "BLOCKED_PROCESS": "차단 프로그램",
     "UNAUTHORIZED_PROCESS": "허용되지 않은 프로그램",
@@ -92,62 +95,86 @@ def _danger_reason(req: StatusReportRequest) -> str:
     return req.foreground_window or "차단 대상 화면 표시"
 
 
-def apply_danger_hold(
-    req: StatusReportRequest, now: Optional[datetime] = None
-) -> tuple[str, Optional[str]]:
-    """보고 상태에 DANGER 유지를 적용한 (대시보드에 보일 상태, DANGER 이유)를 반환한다.
+def register_danger(req: StatusReportRequest, now: Optional[datetime] = None) -> None:
+    """실시간 DANGER 보고면 DANGER 유지를 (다시) 시작한다.
 
+    DB(agents.current_state)에는 에이전트가 보낸 원래 상태를 저장하고, 유지는 읽을 때 겹쳐 적용한다
+    (display_state, summarize_agent). 그래야 보고가 끊겨도 유지 시간이 지나면 정확히 풀린다.
     유지는 현재 탐지 목록이 담긴 실시간 보고에서만 시작한다. 오프라인 버퍼에서 재전송된
-    과거 보고(목록 없음)의 DANGER로 지금 PC를 다시 DANGER로 유지하지 않기 위함이다.
+    과거 보고(목록 없음)의 DANGER로 지금 PC를 다시 DANGER로 보이지 않게 하기 위함이다.
     """
-    now = now or datetime.now(timezone.utc)
     if req.user_state == "danger" and req.active_detections is not None:
-        reason = _danger_reason(req)
-        _danger_holds[req.agent_id] = (now + timedelta(seconds=settings.danger_hold_seconds), reason)
-        return "danger", reason
-
-    hold = _danger_holds.get(req.agent_id)
-    if hold is not None and now < hold[0]:
-        return "danger", hold[1]
-    _danger_holds.pop(req.agent_id, None)
-    return req.user_state, None
+        now = now or datetime.now(timezone.utc)
+        _danger_holds[req.agent_id] = (now + timedelta(seconds=settings.danger_hold_seconds), _danger_reason(req))
 
 
 def get_danger_reason(agent_id: str, now: Optional[datetime] = None) -> Optional[str]:
-    """DANGER 이유 (유지 시간이 지났으면 None)."""
+    """DANGER 유지 중이면 그 이유, 아니면 None."""
     hold = _danger_holds.get(agent_id)
     if hold is None or (now or datetime.now(timezone.utc)) >= hold[0]:
         return None
     return hold[1]
 
 
-def take_on_screen_events(
+def display_state(agent: Agent, now: Optional[datetime] = None) -> str:
+    """대시보드에 보일 상태: DANGER 유지 중이면 danger, 아니면 저장된 원래 상태."""
+    return "danger" if get_danger_reason(agent.agent_id, now) is not None else agent.current_state
+
+
+def _on_screen_key(item: ActiveDetectionSchema) -> tuple[str, str]:
+    """화면 표시 중복 판정 키. 창 제목은 앞의 알림 개수 표시를 뗀다 ('(3) X'→'(4) X'도 같은 창)."""
+    target = _NOTIFICATION_PREFIX.sub("", item.target) if item.source == "title" else item.target
+    return item.code, target
+
+
+def find_on_screen_events(
     req: StatusReportRequest, now: Optional[datetime] = None
 ) -> list[ActiveDetectionSchema]:
-    """이번 보고에서 새로 화면 앞으로 나온 탐지 항목 (화면 표시 알림을 남길 대상).
+    """이번 보고에서 새로 화면 앞으로 나온 탐지 항목 (화면 표시 알림을 남길 대상). 상태는 바꾸지 않는다.
 
-    직전 보고에서도 화면 앞이던 대상은 제외하고, 같은 대상은 쿨다운 동안 한 번만 돌려준다.
-    현재 탐지 목록이 없는 보고(구버전 에이전트·오프라인 버퍼 재전송)는 판단하지 않고 상태도 바꾸지 않는다.
+    직전 보고에서도 화면 앞이던 대상과, 쿨다운 안에 이미 알림을 남긴 대상은 제외한다.
+    알림 저장이 확정된 뒤 mark_on_screen_state 로 상태를 반영한다 (저장이 실패하면 다음 보고에서 다시 판단).
+    현재 탐지 목록이 없는 보고(구버전 에이전트·오프라인 버퍼 재전송)는 판단하지 않는다.
     """
     if req.active_detections is None:
         return []
     now = now or datetime.now(timezone.utc)
-    on_screen = {(d.code, d.target): d for d in req.active_detections if d.is_foreground and d.target}
+    cooldown = timedelta(seconds=settings.on_screen_alert_cooldown_seconds)
     previous = _on_screen_prev.get(req.agent_id, set())
-    _on_screen_prev[req.agent_id] = set(on_screen)
+    alerted = _on_screen_alerted.get(req.agent_id, {})
 
+    events: list[ActiveDetectionSchema] = []
+    seen: set[tuple[str, str]] = set()
+    for item in req.active_detections:
+        if not (item.is_foreground and item.target):
+            continue
+        key = _on_screen_key(item)
+        if key in previous or key in seen:
+            continue
+        last = alerted.get(key)
+        if last is not None and now - last < cooldown:
+            continue
+        seen.add(key)
+        events.append(item)
+    return events
+
+
+def mark_on_screen_state(
+    req: StatusReportRequest, events: list[ActiveDetectionSchema], now: Optional[datetime] = None
+) -> None:
+    """화면 표시 알림 저장이 확정된 뒤, 직전 화면 상태와 알림 시각을 반영한다."""
+    if req.active_detections is None:
+        return
+    now = now or datetime.now(timezone.utc)
+    _on_screen_prev[req.agent_id] = {
+        _on_screen_key(d) for d in req.active_detections if d.is_foreground and d.target
+    }
     cooldown = timedelta(seconds=settings.on_screen_alert_cooldown_seconds)
     alerted = _on_screen_alerted.setdefault(req.agent_id, {})
     for key in [k for k, t in alerted.items() if now - t >= cooldown]:
         del alerted[key]  # 쿨다운이 지난 기록 정리 (대화마다 바뀌는 URL 등으로 계속 쌓이지 않게)
-
-    events = []
-    for key in sorted(set(on_screen) - previous):
-        if key in alerted:
-            continue
-        alerted[key] = now
-        events.append(on_screen[key])
-    return events
+    for item in events:
+        alerted[_on_screen_key(item)] = now
 
 
 def on_screen_alert(item: ActiveDetectionSchema, detected_at: datetime) -> AlertSchema:
@@ -170,11 +197,24 @@ def clear_danger_state(agent_id: str) -> None:
     _on_screen_alerted.pop(agent_id, None)
 
 
-def summarize_agent(agent: Agent) -> AgentSummary:
-    """에이전트 행 → 대시보드 카드 요약 (DANGER면 그 이유 포함)."""
+def alert_for_broadcast(alert: AlertSchema, now: datetime) -> dict:
+    """WebSocket 전송용 알림. 시각은 저장할 때와 같은 기준(시간대 없는 값은 UTC)으로 ISO 형식에 시간대를 붙인다.
+
+    시간대 없이 보내면 브라우저가 로컬 시각으로 해석해 같은 알림이 새로고침 전후로 다르게 보인다.
+    """
+    detected_at = alert.detected_at or now
+    if detected_at.tzinfo is None:
+        detected_at = detected_at.replace(tzinfo=timezone.utc)
+    return alert.model_copy(update={"detected_at": detected_at}).model_dump(mode="json")
+
+
+def summarize_agent(agent: Agent, now: Optional[datetime] = None) -> AgentSummary:
+    """에이전트 행 → 대시보드 카드 요약 (DANGER 유지 중이면 DANGER와 그 이유)."""
     summary = AgentSummary.model_validate(agent)
-    if agent.current_state == "danger":
-        summary.danger_reason = get_danger_reason(agent.agent_id)
+    reason = get_danger_reason(agent.agent_id, now)
+    if reason is not None:
+        summary.current_state = "danger"
+        summary.danger_reason = reason
     return summary
 
 
@@ -232,14 +272,11 @@ async def upsert_agent(db: AsyncSession, req: AgentRegisterRequest) -> Agent:
 async def save_status_report(
     db: AsyncSession,
     req: StatusReportRequest,
-    current_state: Optional[str] = None,
     extra_alerts: Optional[list[AlertSchema]] = None,
 ) -> StatusReportDB:
     """상태 보고서를 DB에 저장하고 에이전트 현재 상태를 업데이트합니다.
 
     Args:
-        current_state: 대시보드에 보일 상태 (DANGER 유지 적용). 없으면 보고 상태 그대로.
-            보고서 기록(status_reports.user_state)에는 에이전트가 보낸 원래 상태를 남긴다.
         extra_alerts: 서버에서 만든 알림 (화면 표시 알림 등)
     """
     chrome = req.browser_details.chrome
@@ -276,7 +313,7 @@ async def save_status_report(
 
     # 에이전트 현재 상태 캐시 업데이트 (+ 대시보드용 최신 보고서 요약 비정규화)
     update_values = {
-        "current_state": current_state or req.user_state,
+        "current_state": req.user_state,  # DANGER 유지는 읽을 때 겹쳐 적용 (display_state)
         "last_seen_at": now,
         "is_online": True,
         # 최신 보고서 요약 — 대시보드 목록이 이 값만 읽으면 되도록 여기서 함께 갱신
@@ -329,9 +366,11 @@ async def get_dashboard_summary(db: AsyncSession) -> DashboardSummary:
 
     total = len(agents)
     online = sum(1 for a in agents if a.is_online)
-    safe = sum(1 for a in agents if a.is_online and a.current_state == "safe")
-    warning = sum(1 for a in agents if a.is_online and a.current_state == "warning")
-    danger = sum(1 for a in agents if a.is_online and a.current_state == "danger")
+    now = datetime.now(timezone.utc)
+    states = [display_state(a, now) for a in agents if a.is_online]  # DANGER 유지 반영
+    safe = states.count("safe")
+    warning = states.count("warning")
+    danger = states.count("danger")
 
     since = datetime.now(timezone.utc) - timedelta(hours=1)
     alert_result = await db.execute(

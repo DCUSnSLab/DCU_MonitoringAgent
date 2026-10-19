@@ -79,18 +79,14 @@ async def receive_report(
         ),
     )
 
-    # DANGER 유지: 잠깐 띄웠다 내린 경우도 대시보드에서 놓치지 않게 일정 시간 DANGER와 이유를 유지
-    current_state, _ = agent_service.apply_danger_hold(req)
-    # 차단 대상이 화면 앞으로 나온 순간은 빨간 '화면 표시' 알림으로 남긴다
     now = datetime.now(timezone.utc)
-    on_screen_alerts = [
-        agent_service.on_screen_alert(item, now)
-        for item in agent_service.take_on_screen_events(req, now)
-    ]
+    # DANGER 유지: 잠깐 띄웠다 내린 경우도 대시보드에서 놓치지 않게 일정 시간 DANGER와 이유를 유지
+    agent_service.register_danger(req, now)
+    # 차단 대상이 화면 앞으로 나온 순간은 빨간 '화면 표시' 알림으로 남긴다
+    on_screen_events = agent_service.find_on_screen_events(req, now)
+    on_screen_alerts = [agent_service.on_screen_alert(item, now) for item in on_screen_events]
 
-    report = await agent_service.save_status_report(
-        db, req, current_state=current_state, extra_alerts=on_screen_alerts
-    )
+    report = await agent_service.save_status_report(db, req, extra_alerts=on_screen_alerts)
 
     # 지금 탐지 중인 항목 최신값 보관 (상세 모달 "현재 탐지 중" 표시용)
     # 필드가 없는 보고(구버전 에이전트·오프라인 버퍼 재전송)는 현재 목록을 건드리지 않는다.
@@ -100,6 +96,11 @@ async def receive_report(
     # 차단 사이트 활성/백그라운드 시간 누적
     await agent_service.accumulate_blocked_site_stats(db, req, prev_last_seen)
 
+    # 보고·알림 저장을 확정한 뒤 화면 표시 상태를 반영한다.
+    # (저장이 실패하면 반영하지 않아, 다음 보고에서 같은 화면 표시 알림을 다시 판단한다)
+    await db.commit()
+    agent_service.mark_on_screen_state(req, on_screen_events, now)
+
     # 대시보드에 실시간 업데이트 push
     summary = await agent_service.get_agent_summary(db, req.agent_id)
     if summary:
@@ -107,8 +108,12 @@ async def receive_report(
             **summary.model_dump(),
             "processes": [p.model_dump() for p in req.processes[:20]],
             "chrome_tabs": [t.model_dump() for t in req.browser_details.chrome.tabs],
-            # 화면 표시 알림도 함께 보내 열려 있는 상세 모달의 최근 알림에 바로 나타나게 한다
-            "alerts": [a.model_dump() for a in [*req.alerts, *on_screen_alerts]],
+            # 실시간 보고의 새 알림(화면 표시 알림 포함)을 보내 열린 상세 모달의 최근 알림에 바로 붙인다.
+            # 오프라인 버퍼 재전송(현재 탐지 목록 없음)의 과거 알림은 새 알림처럼 붙지 않도록 보내지 않는다.
+            "alerts": (
+                [agent_service.alert_for_broadcast(a, now) for a in [*req.alerts, *on_screen_alerts]]
+                if req.active_detections is not None else []
+            ),
         }
         # 현재 탐지 목록이 담긴 보고일 때만 전달 (없으면 대시보드의 기존 목록 유지)
         if req.active_detections is not None:

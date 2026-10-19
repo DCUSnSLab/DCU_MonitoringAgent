@@ -6,6 +6,16 @@ import AgentCard from '@/components/AgentCard';
 import AgentModal from '@/components/AgentModal';
 import Header from '@/components/Header';
 
+const alertTime = (a: AlertInfo) => (a.detected_at ? new Date(a.detected_at).getTime() : 0);
+const alertKey = (a: AlertInfo) => `${a.code}|${a.message}|${alertTime(a)}`;
+
+/** 상세 모달의 최근 알림에 실시간 알림을 합친다 (상세 조회와 겹친 알림 제거, 최신순, 최대 50건) */
+function mergeRecentAlerts(current: AlertInfo[], incoming: AlertInfo[]): AlertInfo[] {
+  const seen = new Set(current.map(alertKey));
+  const fresh = incoming.filter((a) => !seen.has(alertKey(a)));
+  return [...fresh, ...current].sort((a, b) => alertTime(b) - alertTime(a)).slice(0, 50);
+}
+
 export default function DashboardPage() {
   const [summary, setSummary]         = useState<DashboardSummary | null>(null);
   const [agents, setAgents]           = useState<AgentSummary[]>([]);
@@ -73,7 +83,7 @@ export default function DashboardPage() {
               if (prev && prev.agent_id === updated.agent_id) {
                 const merged = { ...prev, ...updated } as AgentDetail;
                 if (newAlerts.length > 0) {
-                  merged.recent_alerts = [...newAlerts, ...prev.recent_alerts].slice(0, 50);
+                  merged.recent_alerts = mergeRecentAlerts(prev.recent_alerts, newAlerts);
                 }
                 return merged;
               }
