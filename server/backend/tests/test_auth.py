@@ -1,9 +1,12 @@
-"""대시보드 관리자 로그인 테스트 (GEN-1149).
+"""대시보드 관리자 로그인 테스트 (GEN-1682).
 
 관리자 계정 1개로 로그인해 토큰을 받고, 대시보드·통계 API와 실시간 연결은 토큰이 있어야 쓸 수 있다.
-로그인에 연속 10회 실패하면 접속 IP를 잠그고, 잠글 때마다 1분 → 5분 → 30분 → 60분 → 120분으로 늘린다.
+로그인에 연속 10회 실패하면 잠그고, 잠글 때마다 1분 → 5분 → 30분 → 60분 → 120분으로 늘린다.
+실패는 신뢰 기기(전에 로그인한 브라우저)면 기기별로, 아니면 접속 IP별로 센다.
 """
 import re
+import threading
+import time
 
 import httpx
 import pytest
@@ -60,8 +63,9 @@ def test_token_rejects_tampering_and_garbage():
     token, _ = auth_service.issue_token("admin")
     payload, signature = token.split(".")
     forged_payload = auth_service._b64encode(b'{"sub":"admin","exp":9999999999}')
+    other_char = "B" if signature[-1] != "B" else "C"  # 항상 원래와 다른 서명
     for bad in ("", "abc", ".", f"{payload}.", f".{signature}", f"{forged_payload}.{signature}",
-                f"{payload}.{signature[:-2]}AA", token + "x"):
+                f"{payload}.{signature[:-1]}{other_char}", token + "x", "abc.\u00e9", "\u00e9.abc", token + "\u00e9"):
         assert auth_service.verify_token(bad) is None, bad
 
 
@@ -98,6 +102,37 @@ def test_no_password_configured_means_no_login(monkeypatch):
     monkeypatch.setattr(settings, "dashboard_admin_password", "")
     assert not auth_service.is_configured()
     assert not auth_service.check_credentials("admin", "")
+
+
+def test_device_token_roundtrip_and_forgery(monkeypatch):
+    device_token = auth_service.issue_device_token()
+    device_id = auth_service.verify_device_token(device_token)
+    assert device_id
+    assert auth_service.verify_device_token(auth_service.issue_device_token(device_id)) == device_id  # 같은 기기 유지
+
+    payload, signature = device_token.split(".")
+    forged = auth_service._b64encode(b'{"dev":"attacker"}')
+    for bad in (None, "", "garbage", f"{forged}.{signature}", device_token + "x", "\u00e9.abc"):
+        assert auth_service.verify_device_token(bad) is None, bad
+
+    # 로그인 토큰과 기기 토큰은 서로 대신 쓸 수 없음
+    login_token, _ = auth_service.issue_token("admin")
+    assert auth_service.verify_device_token(login_token) is None
+    assert auth_service.verify_token(device_token) is None
+
+    # 비밀번호를 바꿔도 신뢰 기기는 유지, 서명 비밀값이 바뀌면 무효
+    monkeypatch.setattr(settings, "dashboard_admin_password", "changed")
+    assert auth_service.verify_device_token(device_token) == device_id
+    monkeypatch.setattr(settings, "dashboard_token_secret", "other-secret")
+    assert auth_service.verify_device_token(device_token) is None
+
+
+def test_lockout_key():
+    device_token = auth_service.issue_device_token()
+    device_id = auth_service.verify_device_token(device_token)
+    assert auth_service.lockout_key(device_token, "1.2.3.4") == f"device:{device_id}"
+    assert auth_service.lockout_key(None, "1.2.3.4") == "ip:1.2.3.4"
+    assert auth_service.lockout_key("forged.token", "1.2.3.4") == "ip:1.2.3.4"
 
 
 def test_token_from_subprotocols():
@@ -148,6 +183,16 @@ def test_lockout_is_per_client():
     assert lockout.locked_seconds("b", 0.0) == 0
 
 
+def test_lockout_keeps_bounded_records(monkeypatch):
+    monkeypatch.setattr(LoginLockout, "MAX_TRACKED", 3)
+    lockout = LoginLockout(max_failures=10, lock_minutes=(1,), reset_seconds=86400)
+    for key in ("a", "b", "c"):
+        lockout.record_failure(key, 0.0)
+    lockout.record_failure("a", 1.0)  # a 는 최근 실패 → 뒤로
+    lockout.record_failure("d", 2.0)  # 상한 → 가장 오래된 b 를 버림
+    assert list(lockout._states) == ["c", "a", "d"]
+
+
 def test_lockout_reset_by_success_or_quiet_day():
     lockout = LoginLockout(max_failures=10, lock_minutes=(1, 5), reset_seconds=86400)
     fail(lockout, 10, 0.0)  # 1분 잠금
@@ -167,6 +212,8 @@ async def test_login_and_access_protected_api(client):
     assert r.status_code == 200
     body = r.json()
     assert body["username"] == "admin" and body["expires_at"]
+    assert abs(body["expires_in"] - settings.dashboard_token_ttl_hours * 3600) <= 2
+    assert auth_service.verify_device_token(body["device_token"])
     token = body["token"]
 
     assert (await client.get("/api/auth/me", headers=bearer(token))).json() == {"username": "admin"}
@@ -187,8 +234,9 @@ async def test_protected_api_requires_valid_token(client):
 
 
 async def test_agent_and_ota_endpoints_unaffected(client):
-    """에이전트·OTA 경로는 로그인 토큰이 아니라 기존 API 키로 인증 (헬스체크는 공개)"""
+    """에이전트·OTA 경로는 로그인 토큰과 무관 (에이전트는 기존 API 키, 헬스체크·OTA 조회는 그대로)"""
     assert (await client.get("/api/health")).status_code == 200
+    assert (await client.get("/api/ota/latest")).status_code != 401
     r = await client.post("/api/agents/register", json={"agent_id": "A", "hostname": "PC-1"},
                           headers={"X-API-Key": settings.api_key})
     assert r.status_code == 200
@@ -218,6 +266,38 @@ async def test_successful_login_resets_failures(client):
     assert "남은 시도 9회" in r.json()["detail"]
 
 
+async def login_request(client, password, device_token=None):
+    body = {"username": "admin", "password": password}
+    if device_token:
+        body["device_token"] = device_token
+    return await client.post("/api/auth/login", json=body)
+
+
+async def test_trusted_device_can_login_while_others_locked(client):
+    """다른 사람(신뢰 기기 아님)이 잠금을 걸어도, 전에 로그인한 브라우저는 계속 로그인 가능"""
+    device_token = (await login_request(client, PASSWORD)).json()["device_token"]
+
+    for _ in range(10):
+        r = await login_request(client, "wrong")  # 공격자: 기기 토큰 없음 (운영에서는 모두 같은 IP)
+    assert r.status_code == 429
+    assert (await login_request(client, PASSWORD)).status_code == 429  # 처음 쓰는 브라우저는 잠김
+    assert (await login_request(client, PASSWORD, "forged.token")).status_code == 429  # 위조 기기 토큰도
+
+    r = await login_request(client, PASSWORD, device_token)
+    assert r.status_code == 200
+    assert auth_service.verify_device_token(r.json()["device_token"]) == auth_service.verify_device_token(device_token)
+
+
+async def test_trusted_device_failures_counted_per_device(client):
+    device_token = (await login_request(client, PASSWORD)).json()["device_token"]
+    for _ in range(10):
+        r = await login_request(client, "wrong", device_token)
+    assert r.status_code == 429  # 신뢰 기기도 10번 틀리면 그 기기는 잠김
+    assert (await login_request(client, PASSWORD, device_token)).status_code == 429
+    r = await login_request(client, "wrong")  # 다른 곳의 실패 횟수와는 별개
+    assert "남은 시도 9회" in r.json()["detail"]
+
+
 async def test_login_unavailable_without_configured_password(client, monkeypatch):
     monkeypatch.setattr(settings, "dashboard_admin_password", "")
     r = await client.post("/api/auth/login", json={"username": "admin", "password": ""})
@@ -234,8 +314,7 @@ def test_websocket_requires_token():
             with pytest.raises(WebSocketDisconnect) as closed:
                 ws.receive_text()
             assert closed.value.code == 4401, subprotocols
-            if "bearer" in subprotocols:
-                assert ws.accepted_subprotocol == "bearer"
+            assert ws.accepted_subprotocol == ("bearer" if "bearer" in subprotocols else None)
 
 
 def test_websocket_accepts_valid_token():
@@ -244,3 +323,27 @@ def test_websocket_accepts_valid_token():
     with tc.websocket_connect("/ws/dashboard", subprotocols=["bearer", token]) as ws:
         assert ws.accepted_subprotocol == "bearer"
         assert ws.receive_json()["type"] == "connected"
+
+
+def test_websocket_closed_when_login_expires():
+    """연결 중에 로그인이 만료되면 4401로 닫음 (대시보드가 로그인 화면으로 이동)"""
+    ttl = settings.dashboard_token_ttl_hours * 3600
+    token, expires_at = auth_service.issue_token("admin", now=time.time() - ttl + 2)
+    tc = TestClient(main.app)
+    with tc.websocket_connect("/ws/dashboard", subprotocols=["bearer", token]) as ws:
+        assert ws.receive_json()["type"] == "connected"
+        closed = {}
+
+        def wait_for_close():
+            try:
+                ws.receive_text()
+            except WebSocketDisconnect as e:
+                closed["code"] = e.code
+                closed["at"] = time.time()
+
+        # 닫히지 않으면 테스트가 멈추지 않고 실패하도록 시간 제한을 두고 기다린다
+        waiter = threading.Thread(target=wait_for_close, daemon=True)
+        waiter.start()
+        waiter.join(10)
+        assert closed.get("code") == 4401
+        assert closed["at"] >= expires_at
