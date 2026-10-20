@@ -5,11 +5,14 @@ import {
   AgentDetail, AgentSummary, AlertInfo, AlertLog, DashboardSummary, WSMessage, WS_CLOSE_UNAUTHORIZED, WS_URL, api, wsProtocols,
 } from '@/lib/api';
 import { clearSession, getToken } from '@/lib/auth';
+import { isBoolean, isOneOf, isString, usePersistentState } from '@/lib/persist';
 import AgentCard from '@/components/AgentCard';
 import AgentModal from '@/components/AgentModal';
 import Header from '@/components/Header';
 
-type SortOption = 'name-asc' | 'name-desc' | 'seat-asc' | 'seat-desc';
+const SORT_OPTIONS = ['name-asc', 'name-desc', 'seat-asc', 'seat-desc'] as const;
+type SortOption = (typeof SORT_OPTIONS)[number];
+const isSortOption = isOneOf(SORT_OPTIONS);
 
 // 실시간 연결: 끊기면 이만큼 뒤 재연결, 이만큼 아무 메시지도 없으면 멈춘 연결로 보고 재연결 (서버 신호는 15초마다)
 const WS_RECONNECT_DELAY_MS = 3_000;
@@ -101,9 +104,10 @@ export default function DashboardPage() {
   const [agents, setAgents]           = useState<AgentSummary[]>([]);
   const [alerts, setAlerts]           = useState<AlertLog[]>([]);
   const [selected, setSelected]       = useState<AgentDetail | null>(null);
-  const [selectedLab, setSelectedLab] = useState<string>('전체');
-  const [onlineOnly, setOnlineOnly]   = useState<boolean>(false);
-  const [sortOption, setSortOption]   = useState<SortOption>('name-asc');
+  // 강의실·온라인만·정렬은 이 브라우저에 저장해 새로고침 뒤에도 유지
+  const [savedLab, setSelectedLab]    = usePersistentState<string>('main.lab', '전체', isString);
+  const [onlineOnly, setOnlineOnly]   = usePersistentState<boolean>('main.onlineOnly', false, isBoolean);
+  const [sortOption, setSortOption]   = usePersistentState<SortOption>('main.sort', 'name-asc', isSortOption);
   const [wsStatus, setWsStatus]       = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const wsRef = useRef<WebSocket | null>(null);
   const liveLogRef = useRef<LiveLog>({ active: 0, messages: [] });
@@ -262,6 +266,8 @@ export default function DashboardPage() {
   /* ── 렌더링 ── */
   /* ── 데이터 필터링 (강의실 기준) ── */
   const labs = ['전체', ...Array.from(new Set(agents.map((a) => a.lab_name || '기타'))).sort(naturalCompare)];
+  // 저장해 둔 강의실이 지금 목록에 없으면 '전체'로 보여 준다 (목록을 불러오기 전에는 그대로)
+  const selectedLab = agents.length > 0 && !labs.includes(savedLab) ? '전체' : savedLab;
   // PC 이름·자리 번호순 정렬 (경고·주의 영역과 강의실별 목록 모두 같은 순서)
   const filteredAgents = sortAgents(
     agents
