@@ -15,6 +15,7 @@ import {
   YAxis,
 } from 'recharts';
 import Header from '@/components/Header';
+import { clearPersistentState, isString, usePersistentState } from '@/lib/persist';
 import {
   api,
   BlockedAccessTimeline,
@@ -71,25 +72,36 @@ const COLUMNS: {
 // 컬럼 클릭 시 기본 정렬 방향: 문자열은 오름차순, 숫자/날짜는 내림차순
 const DEFAULT_DIR: Record<string, SortDir> = { str: 'asc', num: 'desc', date: 'desc' };
 
+/* 필터·정렬 저장 (이 브라우저에 저장해 새로고침 뒤에도 유지) */
+const FILTER_KEYS = ['stats.lab', 'stats.dateFrom', 'stats.dateTo', 'stats.query'];
+const DEFAULT_SORT: { key: SortKey; dir: SortDir } = { key: 'last_access_at', dir: 'desc' };
+// 날짜는 직접 고른 경우만 저장 (null = 기본 기간: 최근 30일, 매일 따라감)
+const isDateOrNull = (v: unknown) => v === null || (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v));
+const isSort = (v: unknown) => {
+  const s = v as { key?: unknown; dir?: unknown } | null;
+  return !!s && COLUMNS.some((c) => c.key === s.key) && (s.dir === 'asc' || s.dir === 'desc');
+};
+
 export default function StatisticsPage() {
   const [labs, setLabs] = useState<string[]>([]);
   const [rows, setRows] = useState<BlockedSiteStatRow[]>([]);
   const [timeline, setTimeline] = useState<BlockedAccessTimeline | null>(null);
   const [loading, setLoading] = useState(false);
 
-  /* 필터 상태 */
-  const [lab, setLab] = useState<string>('');
+  /* 필터 상태 (이 브라우저에 저장해 새로고침 뒤에도 유지) */
+  const [savedLab, setLab] = usePersistentState<string>('stats.lab', '', isString);
+  // 저장해 둔 강의실이 지금 목록에 없으면 전체로 (목록을 불러오기 전에는 그대로)
+  const lab = labs.length > 0 && savedLab && !labs.includes(savedLab) ? '' : savedLab;
   const today = isoDate(new Date());
   const monthAgo = isoDate(new Date(Date.now() - 29 * 86400_000));
-  const [dateFrom, setDateFrom] = useState<string>(monthAgo);
-  const [dateTo, setDateTo] = useState<string>(today);
-  const [agentQuery, setAgentQuery] = useState<string>('');
+  const [savedFrom, setDateFrom] = usePersistentState<string | null>('stats.dateFrom', null, isDateOrNull);
+  const [savedTo, setDateTo] = usePersistentState<string | null>('stats.dateTo', null, isDateOrNull);
+  const dateFrom = savedFrom ?? monthAgo;
+  const dateTo = savedTo ?? today;
+  const [agentQuery, setAgentQuery] = usePersistentState<string>('stats.query', '', isString);
 
   /* 상세 테이블 정렬 상태 (기본: 최근 접속 내림차순) */
-  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({
-    key: 'last_access_at',
-    dir: 'desc',
-  });
+  const [sort, setSort] = usePersistentState<{ key: SortKey; dir: SortDir }>('stats.sort', DEFAULT_SORT, isSort);
 
   const handleSort = useCallback((key: SortKey, type: string) => {
     setSort((prev) =>
@@ -97,7 +109,7 @@ export default function StatisticsPage() {
         ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
         : { key, dir: DEFAULT_DIR[type] },
     );
-  }, []);
+  }, [setSort]);
 
   /* 상세 드릴다운 모달 */
   const [detail, setDetail] = useState<BlockedSiteDetail | null>(null);
@@ -269,6 +281,9 @@ export default function StatisticsPage() {
               onChange={(e) => setAgentQuery(e.target.value)}
             />
           </div>
+          <button className="stat-reset-btn" onClick={() => clearPersistentState(...FILTER_KEYS)}>
+            필터 초기화
+          </button>
           <button className="stat-refresh-btn" onClick={load} disabled={loading}>
             {loading ? '불러오는 중…' : '새로고침'}
           </button>

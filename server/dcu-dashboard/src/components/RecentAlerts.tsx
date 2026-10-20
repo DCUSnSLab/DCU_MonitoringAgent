@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { isOneOf, usePersistentState } from '@/lib/persist';
 import { AlertInfo } from '@/lib/api';
 
 interface Props {
@@ -18,6 +18,7 @@ const CATEGORY_OPTIONS: { value: Category; label: string }[] = [
   { value: 'messenger', label: '메신저' },
   { value: 'other', label: '기타' },
 ];
+const isCategory = isOneOf(['all', ...CATEGORY_OPTIONS.map((o) => o.value)]);
 
 // 화면 표시 알림(ON_SCREEN)의 메시지 앞부분 = 원래 탐지 분류 (서버 on_screen_alert 의 라벨)
 const ON_SCREEN_PREFIX: [string, Category][] = [
@@ -47,7 +48,8 @@ function categoriesOf(a: AlertInfo): Category[] {
 }
 
 export default function RecentAlerts({ alerts }: Props) {
-  const [category, setCategory] = useState<Category | 'all'>('all');
+  // 고른 분류는 이 브라우저에 저장해 다른 PC 상세를 열거나 새로고침해도 유지
+  const [savedCategory, setCategory] = usePersistentState<Category | 'all'>('modal.alertCategory', 'all', isCategory);
 
   const counts = new Map<Category, number>();
   for (const a of alerts) {
@@ -55,6 +57,8 @@ export default function RecentAlerts({ alerts }: Props) {
   }
   // '기타'는 해당 알림이 있을 때만 선택지로 보인다
   const options = CATEGORY_OPTIONS.filter((o) => o.value !== 'other' || counts.has('other'));
+  // 저장된 분류가 이 PC에는 선택지로 없으면(예: '기타' 알림 없음) 전체로 보여 준다
+  const category = savedCategory === 'all' || options.some((o) => o.value === savedCategory) ? savedCategory : 'all';
   const visible = category === 'all' ? alerts : alerts.filter((a) => categoriesOf(a).includes(category));
 
   return (
