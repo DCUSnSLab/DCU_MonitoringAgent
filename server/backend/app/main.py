@@ -12,6 +12,7 @@ from app.database import Base, AsyncSessionLocal, engine
 from app.models import Agent
 from app.routers import agents, auth, dashboard, ws, ota, statistics
 from app.services import agent_service
+from app.services.report_aggregator import report_aggregator, report_stats, write_buckets
 from app.services.ws_manager import ws_manager
 
 logging.basicConfig(
@@ -20,11 +21,33 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+class _SkipRoutineReportAccessLog(logging.Filter):
+    """정상 처리된 에이전트 보고의 접속 로그는 남기지 않는다 (PC 수 × 초당 1줄이라 로그가 묻힘).
+
+    오류 응답(4xx/5xx)과 다른 경로(대시보드·OTA 등)는 그대로 남긴다. 보고 처리량은 1분 요약 로그로 본다.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        # uvicorn 접속 로그 인자: (클라이언트 주소, 메서드, 경로, HTTP 버전, 상태 코드)
+        if isinstance(args, tuple) and len(args) == 5:
+            path, status = args[2], args[4]
+            if isinstance(path, str) and path.startswith("/api/agents/report") and isinstance(status, int) and status < 400:
+                return False
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_SkipRoutineReportAccessLog())
+
 # 이 시간(초) 동안 보고 없으면 오프라인으로 판정
 OFFLINE_THRESHOLD_SECONDS = 60
 # 대시보드 요약 통계 전송 주기(초)와 연결 확인 신호 주기(초)
 DASHBOARD_SUMMARY_INTERVAL_SECONDS = 1.0
 DASHBOARD_HEARTBEAT_SECONDS = 15.0
+# 1분 집계 저장 확인 주기(초)와 보고 처리 요약 로그 주기(초)
+MINUTE_FLUSH_INTERVAL_SECONDS = 5.0
+REPORT_SUMMARY_LOG_SECONDS = 60.0
 
 
 async def _offline_watchdog():
@@ -92,6 +115,37 @@ async def _dashboard_pusher():
             logger.error(f"대시보드 주기 전송 오류: {e}")
 
 
+async def _flush_minute_buckets(buckets) -> int:
+    """1분 집계를 저장한다. 실패하면 집계를 되돌려 다음 주기에 다시 저장한다."""
+    if not buckets:
+        return 0
+    try:
+        async with AsyncSessionLocal() as db:
+            saved = await write_buckets(db, buckets)
+            await db.commit()
+        return saved
+    except Exception as e:
+        report_aggregator.restore(buckets)
+        logger.error(f"1분 집계 저장 오류 (다음 주기에 다시 시도, 대기 {report_aggregator.pending_count}건): {e}")
+        return 0
+
+
+async def _minute_flusher():
+    """에이전트 상태 1분 집계를 주기적으로 저장하고, 보고 처리 요약을 1분에 1줄 남긴다."""
+    loop = asyncio.get_running_loop()
+    last_summary = loop.time()
+    saved_rows = 0
+    while True:
+        await asyncio.sleep(MINUTE_FLUSH_INTERVAL_SECONDS)
+        saved_rows += await _flush_minute_buckets(report_aggregator.take_ready())
+        if loop.time() - last_summary >= REPORT_SUMMARY_LOG_SECONDS:
+            line = report_stats.take_summary()
+            if line:
+                logger.info(f"최근 1분 {line} · 1분 집계 저장 {saved_rows}행")
+            saved_rows = 0
+            last_summary = loop.time()
+
+
 async def _retention_cleanup():
     """주기적으로 보관 기간이 지난 원시 데이터/통계를 정리합니다 (하루 1회)."""
     while True:
@@ -123,12 +177,18 @@ async def lifespan(app: FastAPI):
     # 대시보드 요약 통계·연결 확인 신호 주기 전송
     pusher = asyncio.create_task(_dashboard_pusher())
 
+    # 에이전트 상태 1분 집계 저장
+    flusher = asyncio.create_task(_minute_flusher())
+
     yield
 
     watchdog.cancel()
     cleanup.cancel()
     pusher.cancel()
-    logger.info("서버 종료")
+    flusher.cancel()
+    # 아직 저장하지 않은 1분 집계를 모두 저장 (배포·재시작 시 손실 방지)
+    saved = await _flush_minute_buckets(report_aggregator.take_all())
+    logger.info(f"서버 종료 (남은 1분 집계 {saved}행 저장)")
 
 
 

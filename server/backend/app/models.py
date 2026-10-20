@@ -2,9 +2,10 @@
 SQLAlchemy DB 모델 정의
 
 테이블:
-  - agents         : 등록된 에이전트 (실습실 PC) 정보
-  - status_reports : 에이전트 상태 보고 이력
-  - alert_logs     : 개별 알림 이력
+  - agents               : 등록된 에이전트 (실습실 PC) 정보 + 최신 보고 요약
+  - agent_status_minutes : 에이전트 상태 1분 집계 이력 (보고 이력은 여기에 쌓는다)
+  - status_reports       : (사용 중단) 예전 1초 단위 보고 이력. 새 보고는 쓰지 않는다
+  - alert_logs           : 개별 알림 이력
 """
 
 from datetime import date, datetime
@@ -12,7 +13,7 @@ from typing import Optional
 
 from sqlalchemy import (
     Boolean, Date, DateTime, Float, ForeignKey,
-    Integer, String, Text, UniqueConstraint, func,
+    Index, Integer, String, Text, UniqueConstraint, func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -59,7 +60,12 @@ class Agent(Base):
 
 
 class StatusReportDB(Base):
-    """주기적 상태 보고 이력"""
+    """(사용 중단) 예전 1초 단위 상태 보고 이력.
+
+    보고마다 1행씩 쌓였지만 읽는 곳이 없어 쓰기 부하만 컸다 (GEN-1683).
+    새 보고는 agent_status_minutes 에 1분 단위로 집계해 저장하고, 이 테이블에는 쓰지 않는다.
+    기존 데이터 정리 방법은 migrations/2026-10-20_report_minutely.sql 참고.
+    """
     __tablename__ = "status_reports"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -85,9 +91,6 @@ class StatusReportDB(Base):
 
     # 관계
     agent: Mapped["Agent"] = relationship("Agent", back_populates="reports")
-    alerts: Mapped[list["AlertLogDB"]] = relationship(
-        "AlertLogDB", back_populates="report", cascade="all, delete-orphan"
-    )
 
 
 class AlertLogDB(Base):
@@ -95,9 +98,9 @@ class AlertLogDB(Base):
     __tablename__ = "alert_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    report_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("status_reports.id", ondelete="CASCADE"), index=True
-    )
+    # 예전 status_reports 행 번호. 새 알림은 비워 둔다 (보고 이력을 1분 집계로 바꾸면서 연결을 끊음).
+    # 외래키를 두지 않는다: status_reports 를 비울 때 ON DELETE CASCADE 로 알림 이력까지 지워지지 않도록.
+    report_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     agent_id: Mapped[str] = mapped_column(String(128), index=True)
 
     level: Mapped[str] = mapped_column(String(16), default="warning")
@@ -109,8 +112,49 @@ class AlertLogDB(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    # 관계
-    report: Mapped["StatusReportDB"] = relationship("StatusReportDB", back_populates="alerts")
+
+class AgentStatusMinute(Base):
+    """에이전트 상태 1분 집계 (에이전트 × 1분당 1행)
+
+    보고(약 1초 간격)를 서버 메모리에서 1분씩 모아 한 번에 저장한다 (services/report_aggregator.py).
+    평균은 합계(*_sum)와 샘플 수(samples)로 저장한다: 오프라인 버퍼 재전송처럼 이미 저장한 분에
+    늦게 들어온 샘플을 더할 때 단순 덧셈으로 합칠 수 있도록. 평균 = *_sum / samples.
+    """
+    __tablename__ = "agent_status_minutes"
+    __table_args__ = (
+        UniqueConstraint("agent_id", "minute", name="uq_agent_status_minute"),
+        Index("ix_agent_status_minutes_minute", "minute"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    agent_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("agents.agent_id", ondelete="CASCADE"), nullable=False
+    )
+    # 집계 구간의 시작 시각 (UTC, 분 단위로 내림)
+    minute: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    samples: Mapped[int] = mapped_column(Integer, default=0)  # 이 분에 받은 보고 수
+
+    cpu_sum: Mapped[float] = mapped_column(Float, default=0.0)
+    cpu_max: Mapped[float] = mapped_column(Float, default=0.0)
+    memory_sum: Mapped[float] = mapped_column(Float, default=0.0)
+    memory_max: Mapped[float] = mapped_column(Float, default=0.0)
+    process_count_sum: Mapped[int] = mapped_column(Integer, default=0)
+    process_count_max: Mapped[int] = mapped_column(Integer, default=0)
+    chrome_tab_count_sum: Mapped[int] = mapped_column(Integer, default=0)
+    chrome_tab_count_max: Mapped[int] = mapped_column(Integer, default=0)
+
+    alert_count: Mapped[int] = mapped_column(Integer, default=0)  # 이 분에 새로 발생한 알림 합계
+
+    # 상태별 샘플 수 (보고 간격이 약 1초라 대략 그 상태로 있던 초)
+    safe_samples: Mapped[int] = mapped_column(Integer, default=0)
+    warning_samples: Mapped[int] = mapped_column(Integer, default=0)
+    danger_samples: Mapped[int] = mapped_column(Integer, default=0)
+
+    # 이 분의 마지막 보고 기준 값 (평균을 낼 수 없는 값)
+    last_state: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    foreground_window: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    last_sample_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class BlockedSiteDailyStat(Base):

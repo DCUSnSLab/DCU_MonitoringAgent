@@ -13,7 +13,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Agent, AlertLogDB, BlockedSiteDailyStat, StatusReportDB
+from app.models import Agent, AgentStatusMinute, AlertLogDB, BlockedSiteDailyStat, StatusReportDB
 from app.schemas import (
     ActiveDetectionSchema,
     AgentRegisterRequest,
@@ -257,21 +257,21 @@ def summarize_agent(agent: Agent, now: Optional[datetime] = None) -> AgentSummar
     return summary
 
 
+def parse_lab_name(name: Optional[str]) -> Optional[str]:
+    """호스트명에서 강의실 이름을 뽑는다 (D2-535-21 → 535). 형식이 다르면 None."""
+    if not name:
+        return None
+    chunks = re.split(r"[-_]", name)
+    return chunks[1] if len(chunks) >= 2 else None
+
+
 async def upsert_agent(db: AsyncSession, req: AgentRegisterRequest) -> Agent:
-    """에이전트를 등록하거나 기존 에이전트 정보를 갱신합니다."""
+    """에이전트를 등록하거나 기존 에이전트 정보를 갱신합니다 (등록 API 전용)."""
     result = await db.execute(select(Agent).where(Agent.agent_id == req.agent_id))
     agent = result.scalar_one_or_none()
 
     now = datetime.now(timezone.utc)
-    
-    # 강의실 이름(lab_name) 파싱
-    import re
-    parsed_lab_name = None
-    target_name = req.hostname or req.agent_id
-    if target_name:
-        chunks = re.split(r'[-_]', target_name)
-        if len(chunks) >= 2:
-            parsed_lab_name = chunks[1]
+    parsed_lab_name = parse_lab_name(req.hostname or req.agent_id)
 
     if agent is None:
         agent = Agent(
@@ -308,38 +308,80 @@ async def upsert_agent(db: AsyncSession, req: AgentRegisterRequest) -> Agent:
 
 
 
-async def save_status_report(
+# ─── 상태 보고 저장 (GEN-1683) ────────────────────────────────────
+# 보고 1건당 DB 작업을 줄인다:
+#   agents 행은 한 번만 읽고(직전 last_seen_at 도 여기서), 바뀐 값을 메모리 객체에 모아 커밋 때 UPDATE 1회로 쓴다.
+#   예전 status_reports 1행 INSERT 는 하지 않고 1분 집계(services/report_aggregator.py)로 대신한다.
+
+
+async def load_agent_for_report(
+    db: AsyncSession, req: StatusReportRequest
+) -> tuple[Agent, Optional[datetime]]:
+    """보고를 보낸 에이전트 행과 직전 보고 시각(last_seen_at)을 한 번의 SELECT 로 가져온다.
+
+    처음 보는 에이전트면 새로 만든다 (직전 보고 시각은 None).
+    """
+    result = await db.execute(select(Agent).where(Agent.agent_id == req.agent_id))
+    agent = result.scalar_one_or_none()
+    if agent is not None:
+        return agent, agent.last_seen_at
+
+    hostname = req.hostname or req.agent_id
+    agent = Agent(
+        agent_id=req.agent_id,
+        hostname=hostname,
+        lab_name=parse_lab_name(hostname),
+        ip_address=req.ip_address or None,
+        agent_version=req.agent_version or None,
+    )
+    db.add(agent)
+    # 같은 보고에서 이 에이전트를 참조하는 행(차단 사이트 통계)보다 먼저 들어가도록 바로 INSERT
+    await db.flush()
+    logger.info(f"신규 에이전트 등록(보고 기반): {req.agent_id} ({hostname}) | IP: {req.ip_address} - 강의실: {agent.lab_name}")
+    return agent, None
+
+
+def apply_report_to_agent(agent: Agent, req: StatusReportRequest, now: datetime) -> None:
+    """보고 내용을 에이전트 행(메모리 객체)에 반영한다. DB 에는 커밋 때 UPDATE 1회로 기록된다.
+
+    빈 값으로 기존 정보를 덮어쓰지 않는다 (보고에 일부 필드가 비어 올 수 있음).
+    """
+    if req.hostname:
+        agent.hostname = req.hostname
+    lab_name = parse_lab_name(req.hostname or req.agent_id)
+    if lab_name:
+        agent.lab_name = lab_name
+    if req.ip_address:
+        agent.ip_address = req.ip_address
+    if req.agent_version:
+        agent.agent_version = req.agent_version
+
+    agent.is_online = True
+    agent.last_seen_at = now
+    agent.current_state = req.user_state  # DANGER 유지는 읽을 때 겹쳐 적용 (display_state)
+
+    # 최신 보고서 요약 — 대시보드 목록이 이 값만 읽으면 되도록 함께 갱신
+    agent.last_report_at = req.timestamp or now
+    agent.process_count = len(req.processes)
+    agent.chrome_tab_count = req.browser_details.chrome.tab_count
+    agent.alert_count = len(req.alerts)
+    agent.cpu_percent = req.system_info.cpu_percent
+    agent.memory_percent = req.system_info.memory_percent
+    agent.foreground_window = req.foreground_window
+
+    logger.debug(f"상태 보고: {req.agent_id} | IP: {req.ip_address or 'N/A'} | 상태: {req.user_state}")
+
+
+def save_report_alerts(
     db: AsyncSession,
     req: StatusReportRequest,
     extra_alerts: Optional[list[AlertSchema]] = None,
-) -> StatusReportDB:
-    """상태 보고서를 DB에 저장하고 에이전트 현재 상태를 업데이트합니다.
-
-    Args:
-        extra_alerts: 서버에서 만든 알림 (화면 표시 알림 등)
-    """
-    chrome = req.browser_details.chrome
-    now = datetime.now(timezone.utc)
-
-    # 보고서 저장
-    report = StatusReportDB(
-        agent_id=req.agent_id,
-        reported_at=req.timestamp or now,
-        user_state=req.user_state,
-        alert_count=len(req.alerts),
-        cpu_percent=req.system_info.cpu_percent,
-        memory_percent=req.system_info.memory_percent,
-        process_count=len(req.processes),
-        chrome_tab_count=chrome.tab_count,
-        foreground_window=req.foreground_window,
-    )
-    db.add(report)
-    await db.flush()  # report.id 생성
-
-    # 알림 저장
+    now: Optional[datetime] = None,
+) -> None:
+    """보고의 알림과 서버에서 만든 알림(화면 표시 알림 등)을 alert_logs 에 추가한다 (커밋 때 INSERT)."""
+    now = now or datetime.now(timezone.utc)
     for alert in [*req.alerts, *(extra_alerts or [])]:
-        alert_log = AlertLogDB(
-            report_id=report.id,
+        db.add(AlertLogDB(
             agent_id=req.agent_id,
             level=alert.level,
             code=alert.code,
@@ -347,41 +389,7 @@ async def save_status_report(
             process_name=alert.process_name,
             url=alert.url,
             detected_at=alert.detected_at or now,
-        )
-        db.add(alert_log)
-
-    # 에이전트 현재 상태 캐시 업데이트 (+ 대시보드용 최신 보고서 요약 비정규화)
-    update_values = {
-        "current_state": req.user_state,  # DANGER 유지는 읽을 때 겹쳐 적용 (display_state)
-        "last_seen_at": now,
-        "is_online": True,
-        # 최신 보고서 요약 — 대시보드 목록이 이 값만 읽으면 되도록 여기서 함께 갱신
-        # (별도 쿼리 없이 기존 UPDATE 한 번에 얹는다)
-        "last_report_at": report.reported_at,
-        "process_count": report.process_count,
-        "chrome_tab_count": report.chrome_tab_count,
-        "alert_count": report.alert_count,
-        "cpu_percent": report.cpu_percent,
-        "memory_percent": report.memory_percent,
-        "foreground_window": report.foreground_window,
-    }
-    if req.agent_version:
-        update_values["agent_version"] = req.agent_version
-    # 보고서에 담겨 온 IP/호스트명을 에이전트 레코드에 반영 (빈 값은 무시)
-    if req.ip_address:
-        update_values["ip_address"] = req.ip_address
-    if req.hostname:
-        update_values["hostname"] = req.hostname
-
-    await db.execute(
-        update(Agent)
-        .where(Agent.agent_id == req.agent_id)
-        .values(**update_values)
-    )
-
-    logger.info(f"상태 보고: {req.agent_id} | IP: {req.ip_address or 'N/A'} | 상태: {req.user_state}")
-
-    return report
+        ))
 
 
 async def get_agent_summary(db: AsyncSession, agent_id: str) -> Optional[AgentSummary]:
@@ -565,6 +573,9 @@ async def cleanup_old_data(db: AsyncSession, retention_days: int) -> dict:
     reports_res = await db.execute(
         delete(StatusReportDB).where(StatusReportDB.reported_at < cutoff_dt)
     )
+    minutes_res = await db.execute(
+        delete(AgentStatusMinute).where(AgentStatusMinute.minute < cutoff_dt)
+    )
     stats_res = await db.execute(
         delete(BlockedSiteDailyStat).where(BlockedSiteDailyStat.stat_date < cutoff_date)
     )
@@ -573,6 +584,7 @@ async def cleanup_old_data(db: AsyncSession, retention_days: int) -> dict:
     deleted = {
         "alert_logs": alerts_res.rowcount or 0,
         "status_reports": reports_res.rowcount or 0,
+        "agent_status_minutes": minutes_res.rowcount or 0,
         "blocked_site_daily_stats": stats_res.rowcount or 0,
     }
     logger.info(f"보관 정리 완료(>{retention_days}일): {deleted}")

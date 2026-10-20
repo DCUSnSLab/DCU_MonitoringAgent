@@ -12,6 +12,7 @@ Producer-Consumer 패턴:
 import os
 import re
 import json
+import logging
 import queue
 import socket
 import uuid
@@ -78,6 +79,9 @@ class DataCollector:
 
         # 알림 이력 (중복 알림 방지용 - 최근 1분)
         self._recent_alert_keys: dict = {}
+
+        # 마지막으로 INFO 로 남긴 사용자 상태 (상태가 바뀔 때만 INFO 로그)
+        self._last_logged_state: Optional[str] = None
 
         logger.info("DataCollector 초기화 완료")
         logger.info(f"  프로세스 모드: {config.monitoring.process.mode}")
@@ -309,17 +313,26 @@ class DataCollector:
         return _NOTIFICATION_PREFIX.sub("", alert.window_title or "")
 
     def _log_summary(self, report: StatusReport):
-        """수집 결과를 요약하여 로그로 출력합니다."""
+        """수집 결과를 요약하여 로그로 출력합니다.
+
+        수집은 1초마다 돌기 때문에 매 사이클 요약은 DEBUG 로 남기고,
+        사용자 상태(SAFE/WARNING/DANGER)가 바뀐 사이클만 INFO 로 남긴다 (GEN-1683).
+        새 알림은 1분 단위로 중복 제거되므로 WARNING 으로 그대로 남긴다.
+        """
         chrome = report.browser_details.chrome
         state_name = report.user_state.name if report.user_state else "UNKNOWN"
+        changed = state_name != self._last_logged_state
+        self._last_logged_state = state_name
+        level = logging.INFO if changed else logging.DEBUG
         try:
-            logger.info(
+            logger.log(
+                level,
                 f"[state:{state_name}] proc:{len(report.processes)} | "
                 f"tabs:{chrome.tab_count} | alerts:{len(report.alerts)} | "
                 f"fg:{report.foreground_window or 'N/A'}"
             )
         except UnicodeEncodeError:
-            logger.info(f"[state:{state_name}] proc:{len(report.processes)} tabs:{chrome.tab_count} alerts:{len(report.alerts)}")
+            logger.log(level, f"[state:{state_name}] proc:{len(report.processes)} tabs:{chrome.tab_count} alerts:{len(report.alerts)}")
         for alert in report.alerts:
             logger.warning(f"  [{alert.level.upper()}] {alert.message}")
 
