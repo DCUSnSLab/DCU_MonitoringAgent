@@ -15,6 +15,7 @@ import {
   YAxis,
 } from 'recharts';
 import Header from '@/components/Header';
+import SearchableSelect from '@/components/SearchableSelect';
 import { clearPersistentState, isString, usePersistentState } from '@/lib/persist';
 import {
   api,
@@ -244,14 +245,20 @@ export default function StatisticsPage() {
         <div className="stat-filter-bar">
           <div className="stat-filter-field">
             <label>강의실</label>
-            <select value={lab} onChange={(e) => setLab(e.target.value)}>
-              <option value="">전체</option>
-              {labs.map((l) => (
-                <option key={l} value={l}>
-                  {l}호
-                </option>
-              ))}
-            </select>
+            <SearchableSelect
+              ariaLabel="강의실"
+              placeholder="강의실 검색"
+              value={lab}
+              onChange={setLab}
+              options={[
+                { value: '', label: '전체' },
+                // 호실 번호순 (520 → 521 → 1210), 빈 이름은 '전체'와 겹치므로 제외
+                ...labs
+                  .filter(Boolean)
+                  .sort((a, b) => a.localeCompare(b, 'ko', { numeric: true }))
+                  .map((l) => ({ value: l, label: `${l}호` })),
+              ]}
+            />
           </div>
           <div className="stat-filter-field">
             <label>시작일</label>

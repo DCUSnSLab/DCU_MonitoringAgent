@@ -9,6 +9,7 @@ import { isBoolean, isOneOf, isString, usePersistentState } from '@/lib/persist'
 import AgentCard from '@/components/AgentCard';
 import AgentModal from '@/components/AgentModal';
 import Header from '@/components/Header';
+import SearchableSelect from '@/components/SearchableSelect';
 
 const SORT_OPTIONS = ['name-asc', 'name-desc', 'seat-asc', 'seat-desc'] as const;
 type SortOption = (typeof SORT_OPTIONS)[number];
@@ -295,28 +296,20 @@ export default function DashboardPage() {
       </Header>
 
       {/* ── 필터 옵션 ── */}
-      <div style={{ padding: '0 2rem', marginTop: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+      <div style={{ padding: '0 2rem', marginTop: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
         <h3 style={{ margin: 0, fontSize: '1rem', color: 'var(--text-secondary)' }}>강의실 필터:</h3>
-        <select 
-          value={selectedLab} 
-          onChange={(e) => setSelectedLab(e.target.value)}
-          style={{
-            padding: '8px 16px',
-            borderRadius: '6px',
-            border: '1px solid var(--border)',
-            backgroundColor: 'var(--bg-elevated)',
-            color: 'var(--text-primary)',
-            fontSize: '15px',
-            cursor: 'pointer',
-            minWidth: '120px',
-            fontWeight: 500,
-            outline: 'none'
-          }}
-        >
-          {labs.map(lab => (
-            <option key={lab} value={lab}>{lab === '전체' ? '🌐 전체 보기' : `🏢 ${lab}호`}</option>
-          ))}
-        </select>
+        {/* 목록에서 고르거나 입력해 검색 (예: 52 → 520호·521호) */}
+        <SearchableSelect
+          className="lab-filter-select"
+          ariaLabel="강의실 필터"
+          placeholder="강의실 검색"
+          value={selectedLab}
+          onChange={setSelectedLab}
+          options={labs.map((lab) => ({
+            value: lab,
+            label: lab === '전체' ? '🌐 전체 보기' : lab === '기타' ? '🏢 기타' : `🏢 ${lab}호`,
+          }))}
+        />
 
         <label
           style={{
