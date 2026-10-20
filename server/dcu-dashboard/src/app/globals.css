@@ -665,6 +665,78 @@ html, body {
 .stat-filter-field input:focus { border-color: var(--accent); }
 .stat-filter-field input::-webkit-calendar-picker-indicator { filter: invert(0.6); }
 
+/* ─── 검색 가능한 콤보박스 (강의실 선택) ─── */
+.searchable-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 160px;
+}
+.searchable-select .searchable-select-input {
+  width: 100%;
+  padding: 8px 32px 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  outline: none;
+  cursor: pointer;
+}
+.searchable-select.open .searchable-select-input { cursor: text; }
+.searchable-select .searchable-select-input:focus { border-color: var(--accent); }
+.searchable-select .searchable-select-input::placeholder { color: var(--text-muted); }
+.searchable-select-toggle {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: transform var(--transition);
+}
+.searchable-select.open .searchable-select-toggle { transform: translateY(-50%) rotate(180deg); }
+.searchable-select-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 100%;
+  max-height: 280px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 50;
+}
+.searchable-select-option {
+  padding: 7px 10px;
+  border-radius: 4px;
+  font-size: 14px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+/* 키보드·마우스로 가리킨 항목 (Enter 로 선택될 항목) */
+.searchable-select-option.active { background: rgba(59, 130, 246, 0.22); box-shadow: inset 2px 0 0 var(--accent); }
+.searchable-select-option[aria-selected='true'] { color: var(--accent-light); font-weight: 600; }
+.searchable-select-empty {
+  padding: 7px 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+/* 대시보드 강의실 필터는 조금 크게 */
+.lab-filter-select { min-width: 180px; }
+.lab-filter-select .searchable-select-input { padding: 8px 32px 8px 14px; font-size: 15px; }
+
 .stat-refresh-btn {
   padding: 9px 18px;
   border-radius: var(--radius-sm);
