@@ -28,6 +28,17 @@ from agent.utils.logger import get_logger
 
 logger = get_logger("network.api_client")
 
+# 서버로 보내지 않는 필드 (GEN-1683)
+# 서버가 저장·표시하지 않는 값이라 보고 크기만 키운다 (프로세스 250개 기준 약 143KB → 28KB).
+#   cmdline·username·create_time: 서버 스키마에 없음 (받아서 버림)
+#   exe_path·status·cpu_percent: 서버 스키마에는 있지만 저장·표시하는 곳이 없고, status·cpu_percent 는 늘 기본값
+#   favicon_url: 서버 스키마에 없음
+# 탐지·판정은 에이전트 안에서 이 값들을 그대로 쓴다 (전송할 때만 뺀다).
+REPORT_EXCLUDE = {
+    "processes": {"__all__": {"cmdline", "username", "create_time", "exe_path", "status", "cpu_percent"}},
+    "browser_details": {"chrome": {"tabs": {"__all__": {"favicon_url"}}}},
+}
+
 
 class ApiClient:
     """
@@ -94,11 +105,13 @@ class ApiClient:
         return self._post("/api/agents/register", registration.dict())
 
     def send_report(self, report: StatusReport) -> bool:
-        """상태 보고서를 서버에 전송합니다. 응답의 OTA 정보도 처리합니다."""
-        import json
-        data = json.loads(report.json())
+        """상태 보고서를 서버에 전송합니다. 응답의 OTA 정보도 처리합니다.
 
-        success, resp_data = self._post_with_response("/api/agents/report", data)
+        보고서를 JSON 으로 한 번만 직렬화해 그대로 보낸다 (dict 로 되돌렸다가 다시 직렬화하지 않음).
+        """
+        body = report.json(exclude=REPORT_EXCLUDE).encode("utf-8")
+
+        success, resp_data = self._post_with_response("/api/agents/report", body=body)
 
         # OTA 업데이트 응답 처리
         if success and resp_data and resp_data.get("update_available"):
@@ -199,7 +212,8 @@ class ApiClient:
             # 현재 탐지 목록은 보고 시점의 휘발성 상태라 저장하지 않는다.
             # (나중에 재전송될 때 서버의 "현재 탐지 중"을 과거 값으로 덮어쓰지 않도록, 필드 자체를 뺀다)
             with open(filepath, "w", encoding="utf-8") as f:
-                json.dump(report.dict(exclude={"active_detections"}), f, ensure_ascii=False, default=str)
+                json.dump(report.dict(exclude={"active_detections": True, **REPORT_EXCLUDE}),
+                          f, ensure_ascii=False, default=str)
 
             # 버퍼 크기 제한 (오래된 파일 삭제)
             self._trim_buffer()
@@ -236,16 +250,23 @@ class ApiClient:
         success, _ = self._post_with_response(endpoint, data)
         return success
 
-    def _post_with_response(self, endpoint: str, data: dict) -> tuple:
+    def _post_with_response(self, endpoint: str, data: Optional[dict] = None, body: Optional[bytes] = None) -> tuple:
         """
         JSON 데이터를 POST 요청으로 전송하고, 응답 JSON도 함께 반환합니다.
+
+        Args:
+            data: 전송할 dict (requests 가 JSON 으로 직렬화)
+            body: 이미 직렬화된 JSON 바이트 (data 대신)
 
         Returns:
             (success: bool, response_data: dict or None)
         """
         url = f"{self._config.base_url}{endpoint}"
         try:
-            resp = self._session.post(url, json=data, timeout=5)
+            if body is not None:
+                resp = self._session.post(url, data=body, timeout=5)  # Content-Type 은 세션 헤더(application/json)
+            else:
+                resp = self._session.post(url, json=data, timeout=5)
             if resp.status_code in (200, 201):
                 logger.debug(f"POST 성공: {endpoint} ({resp.status_code})")
                 try:
