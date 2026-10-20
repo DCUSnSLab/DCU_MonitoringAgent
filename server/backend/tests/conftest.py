@@ -7,6 +7,7 @@ from sqlalchemy.pool import StaticPool
 from app.database import Base
 import app.models  # noqa: F401  (모델 등록 보장)
 from app.services import agent_service
+from app.services.report_aggregator import report_aggregator, report_stats
 
 
 @pytest.fixture(autouse=True)
@@ -15,6 +16,18 @@ def _reset_gap_carry():
     agent_service._gap_carry.clear()
     yield
     agent_service._gap_carry.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_report_aggregator():
+    """1분 집계·처리 통계(메모리)가 테스트 사이에 새지 않도록 비운다."""
+    report_aggregator.take_all()
+    report_aggregator._clock_offset.clear()
+    report_stats.reset()
+    yield
+    report_aggregator.take_all()
+    report_aggregator._clock_offset.clear()
+    report_stats.reset()
 
 
 @pytest_asyncio.fixture

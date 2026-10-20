@@ -8,10 +8,11 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.config import settings
 from app.models import Agent, AlertLogDB, StatusReportDB
+from app.services.report_aggregator import report_aggregator
 from app.routers import agents, dashboard
 from app.schemas import ActiveDetectionSchema, AgentOfflineRequest, StatusReportRequest
 from app.services import agent_service
@@ -249,8 +250,12 @@ async def test_report_flow_holds_danger_and_records_on_screen_alert(db, broadcas
     agent = (await db.execute(select(Agent).where(Agent.agent_id == "A"))).scalar_one()
     assert agent.current_state == "warning"  # 저장은 원래 상태
     assert agent_service.summarize_agent(agent).current_state == "danger"  # 보일 때는 유지 적용
-    states = (await db.execute(select(StatusReportDB.user_state).order_by(StatusReportDB.id))).scalars().all()
-    assert states == ["warning", "danger", "warning"]
+    # 보고별 이력 대신 1분 집계에 상태별 샘플 수로 쌓임 (분 경계를 넘겨도 합계는 같음)
+    buckets = report_aggregator.take_all()
+    assert sum(b.state_samples["warning"] for b in buckets) == 2
+    assert sum(b.state_samples["danger"] for b in buckets) == 1
+    assert max(buckets, key=lambda b: b.last_sample_at).last_state == "warning"
+    assert (await db.execute(select(func.count()).select_from(StatusReportDB))).scalar() == 0  # 예전 이력은 쓰지 않음
 
     alerts = (await db.execute(select(AlertLogDB).where(AlertLogDB.code == "ON_SCREEN"))).scalars().all()
     assert [(a.level, a.message) for a in alerts] == [("danger", "차단 사이트 화면 표시: chatgpt.com/c/1")]

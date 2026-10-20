@@ -8,9 +8,12 @@
 """
 
 import logging
+import time
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Request
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +21,7 @@ from app.config import settings
 from app.database import get_db
 from app.schemas import AgentRegisterRequest, StatusReportRequest, AgentOfflineRequest
 from app.services import agent_service
+from app.services.report_aggregator import report_aggregator, report_stats
 from app.services.ws_manager import ws_manager
 
 logger = logging.getLogger(__name__)
@@ -57,40 +61,45 @@ async def register_agent(
 
 
 @router.post("/api/agents/report")
-async def receive_report(
-    req: StatusReportRequest,
+async def report_endpoint(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(verify_api_key),
 ):
-    """에이전트 상태 보고서 수신 및 저장"""
-    # 차단 사이트 시간 누적을 위해 upsert 전에 직전 보고 시각을 확보한다.
-    # (upsert_agent / save_status_report가 last_seen_at을 현재 시각으로 갱신하므로 그 전에 읽어야 함)
-    from app.models import Agent
-    prev_result = await db.execute(
-        select(Agent.last_seen_at).where(Agent.agent_id == req.agent_id)
-    )
-    prev_last_seen = prev_result.scalar_one_or_none()
+    """에이전트 상태 보고서 수신 (HTTP 진입점).
 
-    # 미등록 에이전트 자동 등록 (보고서에 담겨 온 IP/호스트명 활용)
-    from app.schemas import AgentRegisterRequest as Reg
-    await agent_service.upsert_agent(
-        db,
-        Reg(
-            agent_id=req.agent_id,
-            hostname=req.hostname or req.agent_id,  # fallback
-            ip_address=req.ip_address,
-            agent_version=req.agent_version,
-        ),
-    )
+    본문을 dict 로 바꾸지 않고 원본 바이트를 바로 검증한다 (model_validate_json: 측정상 파싱이 약 2배 빠름).
+    보고마다 로그를 남기지 않고 처리 통계만 모아 1분에 1줄로 남긴다 (main._minute_flusher).
+    """
+    started = time.perf_counter()
+    try:
+        req = StatusReportRequest.model_validate_json(await request.body())
+    except ValidationError as e:
+        raise RequestValidationError(e.errors(include_url=False))
+    result = await receive_report(req, db)
+    report_stats.record(req.agent_id, len(req.alerts), (time.perf_counter() - started) * 1000)
+    return result
 
+
+async def receive_report(req: StatusReportRequest, db: AsyncSession):
+    """에이전트 상태 보고서 처리: 저장 확정 후 대시보드 전송, OTA 확인 결과 응답.
+
+    DB 작업 (GEN-1683): agents SELECT 1회 → (알림 INSERT · 차단 사이트 통계) → 커밋 때 agents UPDATE 1회.
+    상태 이력은 보고마다 저장하지 않고 1분 집계에 누적한다.
+    """
     now = datetime.now(timezone.utc)
+
+    # 에이전트 행과 직전 보고 시각을 한 번에 읽는다 (차단 사이트 시간 누적에 직전 시각이 필요)
+    agent, prev_last_seen = await agent_service.load_agent_for_report(db, req)
+    agent_service.apply_report_to_agent(agent, req, now)
+
     # DANGER 유지: 잠깐 띄웠다 내린 경우도 대시보드에서 놓치지 않게 일정 시간 DANGER와 이유를 유지
     agent_service.register_danger(req, now)
     # 차단 대상이 화면 앞으로 나온 순간은 빨간 '화면 표시' 알림으로 남긴다
     on_screen_events = agent_service.find_on_screen_events(req, now)
     on_screen_alerts = [agent_service.on_screen_alert(item, now) for item in on_screen_events]
 
-    report = await agent_service.save_status_report(db, req, extra_alerts=on_screen_alerts)
+    agent_service.save_report_alerts(db, req, extra_alerts=on_screen_alerts, now=now)
 
     # 지금 탐지 중인 항목 최신값 보관 (상세 모달 "현재 탐지 중" 표시용)
     # 필드가 없는 보고(구버전 에이전트·오프라인 버퍼 재전송)는 현재 목록을 건드리지 않는다.
@@ -100,13 +109,15 @@ async def receive_report(
     # 차단 사이트 활성/백그라운드 시간 누적
     await agent_service.accumulate_blocked_site_stats(db, req, prev_last_seen)
 
-    # 보고·알림 저장을 확정한 뒤 화면 표시 상태를 반영한다.
+    # 보고·알림 저장을 확정한 뒤 화면 표시 상태와 1분 집계에 반영한다.
     # (저장이 실패하면 반영하지 않아, 다음 보고에서 같은 화면 표시 알림을 다시 판단한다)
     await db.commit()
     agent_service.mark_on_screen_state(req, on_screen_events, now)
+    report_aggregator.add(req, now)
 
     # 대시보드에 실시간 업데이트 push
-    summary = await agent_service.get_agent_summary(db, req.agent_id)
+    # 커밋 후에도 agent 객체 값이 유지되므로(expire_on_commit=False) 다시 조회하지 않는다
+    summary = agent_service.summarize_agent(agent)
     if summary:
         update = {
             # 시각 필드(DANGER 구간 등)를 브라우저가 그대로 해석하도록 ISO 형식으로 직렬화
@@ -152,7 +163,7 @@ async def receive_report(
 
     return {
         "status": "ok",
-        "report_id": report.id,
+        "report_id": None,  # 보고 이력을 1분 집계로 바꾸면서 보고별 번호는 없다 (에이전트는 쓰지 않는 값)
         "update_available": update_available,
         "latest_version": latest_version,
         "latest_checksum": latest_checksum,

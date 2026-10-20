@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Agent, AlertLogDB, StatusReportDB
+from app.models import Agent, AlertLogDB
 from app.routers.auth import require_dashboard_user
 from app.schemas import (
     AgentDetail,
