@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { clearSession, useSession } from '@/lib/auth';
+import { useState } from 'react';
+import { logout, useSession } from '@/lib/auth';
 
 const TABS = [
   { href: '/', label: '대시보드' },
@@ -12,6 +13,7 @@ const TABS = [
 export default function Header({ children }: { children?: React.ReactNode }) {
   const pathname = usePathname();
   const session = useSession();
+  const [logoutError, setLogoutError] = useState('');
 
   return (
     <header className="header">
@@ -41,9 +43,13 @@ export default function Header({ children }: { children?: React.ReactNode }) {
           <div className="header-user">
             <span>{session.username}</span>
             {/* 로그인 정보를 지우면 로그인 화면으로 이동 (AuthGate) */}
-            <button type="button" className="logout-btn" onClick={clearSession}>
+            <button type="button" className="logout-btn" onClick={() => {
+              setLogoutError('');
+              void logout().catch(() => setLogoutError('로그아웃에 실패했습니다. 다시 시도하세요.'));
+            }}>
               로그아웃
             </button>
+            {logoutError && <span role="alert">{logoutError}</span>}
           </div>
         )}
       </div>
