@@ -1,10 +1,9 @@
 // 백엔드 빌드·배포 파이프라인
 //
 // 브랜치별 동작 (aibootcamp 와 같은 develop/main 운영):
-// - main    : 테스트 → 이미지 빌드 → Harbor 푸시(latest, 빌드번호) → 운영 K8s 배포(rollout)
-// - develop : 테스트 → 이미지 빌드 → Harbor 푸시(develop 태그만). 운영에는 배포하지 않는다
-//   (이 프로젝트는 개발 서버가 없으므로 develop 은 "깨지지 않는지 검증"까지만 한다)
-// Jenkins 잡의 브랜치 지정자에 main 과 develop 을 모두 넣어야 develop 푸시에도 검증이 돈다.
+// - main    : 테스트 → 이미지 빌드 → Harbor 푸시(latest, 빌드번호) → 운영(dcu-agent-monitor) 배포
+// - develop : 테스트 → 이미지 빌드 → Harbor 푸시(develop) → develop 환경(dcu-agent-monitor-dev, NodePort 30086) 배포
+// Jenkins 잡의 브랜치 지정자에 main 과 develop 을 모두 넣어야 한다.
 def app
 def isMain = false
 
@@ -13,7 +12,7 @@ node {
         def scmVars = checkout scm
         def branch = env.BRANCH_NAME ?: (scmVars.GIT_BRANCH ?: '')
         isMain = (branch == 'main' || branch.endsWith('/main'))
-        echo "branch=${branch} → ${isMain ? '운영 배포 (main)' : '검증만 — 운영 배포 안 함'}"
+        echo "branch=${branch} → ${isMain ? '운영 배포 (main)' : 'develop 환경 배포'}"
     }
 
     stage('Test') {
@@ -54,14 +53,22 @@ node {
         }
     } else {
         stage('Push image (develop)') {
-            // 검증용 태그만 올린다 (latest 를 건드리지 않으므로 운영 파드가 재시작돼도 영향 없음)
+            // develop 태그만 올린다 (latest 를 건드리지 않으므로 운영 파드가 재시작돼도 영향 없음)
             docker.withRegistry("https://harbor.cu.ac.kr", "harbor") {
                 app.push("develop")
+                app.push("develop-${env.BUILD_NUMBER}")
             }
         }
 
+        stage('Kubernetes deploy (develop)') {
+            // develop 환경은 저장소의 매니페스트가 정본 (운영과 달리 Jenkins 호스트 파일을 쓰지 않음)
+            sh "kubectl apply -f server/k8s-manifest-dev.yaml"
+            sh "kubectl rollout restart deployment backend -n dcu-agent-monitor-dev"
+            sh "kubectl rollout status deployment backend -n dcu-agent-monitor-dev --timeout=180s"
+        }
+
         stage('Complete') {
-            echo "develop 검증 완료 — 테스트·이미지 빌드 성공. 운영 배포는 main 에 병합한 뒤 실행됩니다."
+            echo "develop 배포 완료 — 백엔드 http://203.250.35.27:30086 (운영에는 영향 없음)"
         }
     }
 }

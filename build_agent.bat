@@ -7,7 +7,9 @@ echo ========================================================
 
 REM --- Config ---
 set "CONFIG_FILE=config\agent_config.yaml"
-set "SERVER_URL=http://203.250.35.27:30085"
+REM stable = production server, develop = develop server (namespace dcu-agent-monitor-dev)
+set "SERVER_URL_STABLE=http://203.250.35.27:30085"
+set "SERVER_URL_DEVELOP=http://203.250.35.27:30086"
 set "API_KEY=dcu-secret-key-change-in-production"
 set "SKIP_UPLOAD=0"
 REM --- Release channel: stable (all lab PCs) / develop (dev PCs only). Pass as 1st argument or answer the prompt. ---
@@ -18,7 +20,9 @@ if not "!CHANNEL!"=="stable" if not "!CHANNEL!"=="develop" (
     echo [ERROR] Unknown channel "!CHANNEL!". Use stable or develop.
     goto end_script
 )
-echo    Channel: !CHANNEL!
+if "!CHANNEL!"=="develop" (set "SERVER_URL=%SERVER_URL_DEVELOP%") else (set "SERVER_URL=%SERVER_URL_STABLE%")
+set "WS_URL=!SERVER_URL:http=ws!/ws"
+echo    Channel: !CHANNEL!  (server: !SERVER_URL!)
 
 REM --- 1. Read current version from config ---
 echo.
@@ -36,6 +40,15 @@ REM --- 2a. Write version into config (single source of truth for the build) ---
 REM Tolerant regex: matches the version line regardless of indentation / quotes.
 powershell -NoProfile -Command "$v='!NEW_VERSION!'; $p='%CONFIG_FILE%'; $q=[char]34; (Get-Content $p -Encoding UTF8) -replace '^(\s*)version:\s*.*$', ('${1}version: ' + $q + $v + $q) | Set-Content $p -Encoding UTF8"
 echo    Updated %CONFIG_FILE%
+
+REM --- 2a-1. Write server address into config (baked into the exe; agents follow the bundled address after OTA) ---
+REM develop builds talk to the develop server, so they never report to / update from production.
+powershell -NoProfile -Command "$u='!SERVER_URL!'; $w='!WS_URL!'; $p='%CONFIG_FILE%'; $q=[char]34; (Get-Content $p -Encoding UTF8) -replace '^(\s*)base_url:\s*.*$', ('${1}base_url: ' + $q + $u + $q) -replace '^(\s*)ws_url:\s*.*$', ('${1}ws_url: ' + $q + $w + $q) | Set-Content $p -Encoding UTF8"
+findstr /C:"base_url:" %CONFIG_FILE% | findstr /C:"!SERVER_URL!" >nul || (
+    echo [ERROR] Failed to write server address into %CONFIG_FILE%. Aborting.
+    goto end_script
+)
+echo    Server written to config: !SERVER_URL!
 
 REM --- 2a-2. Write channel into config (baked into the exe; agents follow the bundled channel after OTA) ---
 powershell -NoProfile -Command "$c='!CHANNEL!'; $p='%CONFIG_FILE%'; $q=[char]34; $t=Get-Content $p -Encoding UTF8; if ($t -match '^\s*channel:') { $t = $t -replace '^(\s*)channel:\s*.*$', ('${1}channel: ' + $q + $c + $q + '             # OTA channel: stable(all lab PCs) / develop(dev PCs) - set by build_agent.bat') } else { $t = $t -replace '^(\s*)version:(.*)$', ('${1}version:$2' + [Environment]::NewLine + '${1}channel: ' + $q + $c + $q) }; Set-Content $p -Value $t -Encoding UTF8"
@@ -140,9 +153,9 @@ powershell -NoProfile -Command ^
 
 :build_success
 echo ========================================================
-echo Build Successful! (v%NEW_VERSION% / channel %CHANNEL%)
+echo Build Successful! (v%NEW_VERSION% / channel %CHANNEL% / server %SERVER_URL%)
 echo [Distribution File]: dist\DCU_MonitoringAgent_Setup.zip
-if "%CHANNEL%"=="develop" echo [NOTE] develop build: only PCs installed from this exe ^(channel develop^) will receive it via OTA.
+if "%CHANNEL%"=="develop" echo [NOTE] develop build: reports to the develop server and only develop-channel PCs receive it via OTA.
 echo ========================================================
 goto end_script
 
