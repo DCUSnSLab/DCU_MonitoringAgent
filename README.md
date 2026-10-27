@@ -173,6 +173,42 @@ DCU_MonitoringAgent/
 .\venv\Scripts\pytest.exe tests\ -v
 ```
 
+## 브랜치 · 배포 전략
+
+aibootcamp 와 같은 방식으로 운영합니다.
+
+| 브랜치 | 용도 | Jenkins 동작 |
+|---|---|---|
+| `develop` | 기본 작업 브랜치. 기능 브랜치(`GEN-N-설명`)는 여기로 PR | 서버 테스트 + 이미지 빌드 + Harbor `develop` 태그 푸시. **운영에 배포하지 않음** |
+| `main` | 릴리즈 브랜치. `develop` → `main` PR 로만 반영 | 테스트 + 빌드 + `latest` 푸시 + 운영 K8s 배포(rollout) |
+
+- Jenkins 잡(backend, frontend)의 브랜치 지정자에 `*/main` 과 `*/develop` 을 모두 넣어야 develop 푸시에도 검증이 돕니다.
+- 이 프로젝트는 개발 서버가 없으므로 develop 은 "깨지지 않는지 검증"과 develop 용 에이전트 배포까지만 담당합니다.
+
+### 에이전트 배포 채널 (stable / develop)
+
+에이전트 빌드는 Jenkins 가 아니라 Windows PC 에서 `build_agent.bat` 로 만들고 서버에 올립니다(OTA).
+릴리즈에는 **채널**이 있어, 각 PC 는 자기 채널의 최신 버전만 받습니다.
+
+| 채널 | 받는 PC | 쓰임 |
+|---|---|---|
+| `stable` | 실습실 전체 PC (기본, 구버전 에이전트 포함) | 검증이 끝난 정식 배포 |
+| `develop` | develop 빌드로 설치한 PC 만 | 실습실에 영향 없이 새 버전을 먼저 시험 |
+
+```bat
+REM develop 채널로 빌드·업로드 (버전은 1.0.31-dev1 처럼 stable 과 겹치지 않게)
+build_agent.bat develop
+
+REM stable 채널로 빌드·업로드 (인자 없이 실행하면 프롬프트에서 선택, Enter = stable)
+build_agent.bat stable
+```
+
+- 채널은 exe 에 구워지며(`config/agent_config.yaml` 의 `agent.channel`), 빌드 스크립트가 선택한 채널로 기록합니다.
+  빌드 뒤 `agent.channel` 이 `develop` 으로 남은 설정 파일은 커밋하지 마세요.
+- 시험용 PC 를 develop 채널에 넣으려면 그 PC 에 develop 빌드의 `DCU_MonitoringAgent_Setup.zip` 을 한 번 수동 설치합니다. 이후 develop 업로드를 OTA 로 받습니다.
+- develop PC 를 다시 stable 로 돌리려면 stable 빌드를 수동 설치합니다.
+- 서버에서 채널별 최신 버전 확인: `GET /api/ota/latest?channel=develop` (기본은 stable).
+
 ## 라이선스
 
 MIT License
