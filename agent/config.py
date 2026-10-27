@@ -20,6 +20,8 @@ class AgentConfig(BaseModel):
     id: str = ""
     lab_name: str = "실습실"
     version: str = "1.0.10"
+    # OTA 배포 채널: stable(실습실 전체) / develop(개발·검증용 PC). 빌드에 구워진 값을 따른다
+    channel: str = "stable"
 
 
 class ProcessConfig(BaseModel):
@@ -226,10 +228,14 @@ class ConfigManager:
                     
                     need_save = False
                     
-                    # 1. 버전 갱신
+                    # 1. 버전·배포 채널 갱신 (채널도 빌드에 구워진 값이 기준: develop 빌드를 설치한 PC 는 develop 채널)
                     builtin_version = builtin_raw.get("agent", {}).get("version", "")
                     if builtin_version and self._config.agent.version != builtin_version:
                         self._config.agent.version = builtin_version
+                        need_save = True
+                    builtin_channel = builtin_raw.get("agent", {}).get("channel", "")
+                    if builtin_channel and self._config.agent.channel != builtin_channel:
+                        self._config.agent.channel = builtin_channel
                         need_save = True
 
                     # 2. 서버 통신 주소 갱신

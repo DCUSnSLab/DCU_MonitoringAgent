@@ -135,6 +135,7 @@ class DataCollector:
             ip_address=self._ip_address,
             timestamp=timestamp,
             agent_version=self._config.agent.version,
+            channel=self._config.agent.channel,
             system_info=system_info,
             processes=processes,
             browser_details=BrowserDetails(chrome=chrome_info),

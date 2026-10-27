@@ -10,6 +10,15 @@ set "CONFIG_FILE=config\agent_config.yaml"
 set "SERVER_URL=http://203.250.35.27:30085"
 set "API_KEY=dcu-secret-key-change-in-production"
 set "SKIP_UPLOAD=0"
+REM --- Release channel: stable (all lab PCs) / develop (dev PCs only). Pass as 1st argument or answer the prompt. ---
+set "CHANNEL=%~1"
+if "!CHANNEL!"=="" set /p "CHANNEL=0. Release channel [stable/develop] (press Enter for stable): "
+if "!CHANNEL!"=="" set "CHANNEL=stable"
+if not "!CHANNEL!"=="stable" if not "!CHANNEL!"=="develop" (
+    echo [ERROR] Unknown channel "!CHANNEL!". Use stable or develop.
+    goto end_script
+)
+echo    Channel: !CHANNEL!
 
 REM --- 1. Read current version from config ---
 echo.
@@ -27,6 +36,15 @@ REM --- 2a. Write version into config (single source of truth for the build) ---
 REM Tolerant regex: matches the version line regardless of indentation / quotes.
 powershell -NoProfile -Command "$v='!NEW_VERSION!'; $p='%CONFIG_FILE%'; $q=[char]34; (Get-Content $p -Encoding UTF8) -replace '^(\s*)version:\s*.*$', ('${1}version: ' + $q + $v + $q) | Set-Content $p -Encoding UTF8"
 echo    Updated %CONFIG_FILE%
+
+REM --- 2a-2. Write channel into config (baked into the exe; agents follow the bundled channel after OTA) ---
+powershell -NoProfile -Command "$c='!CHANNEL!'; $p='%CONFIG_FILE%'; $q=[char]34; $t=Get-Content $p -Encoding UTF8; if ($t -match '^\s*channel:') { $t = $t -replace '^(\s*)channel:\s*.*$', ('${1}channel: ' + $q + $c + $q + '             # OTA channel: stable(all lab PCs) / develop(dev PCs) - set by build_agent.bat') } else { $t = $t -replace '^(\s*)version:(.*)$', ('${1}version:$2' + [Environment]::NewLine + '${1}channel: ' + $q + $c + $q) }; Set-Content $p -Value $t -Encoding UTF8"
+for /f "tokens=2 delims=: " %%a in ('findstr /C:"channel:" %CONFIG_FILE%') do set "EXE_CHANNEL=%%~a"
+echo    Channel written to config: !EXE_CHANNEL!
+if not "!EXE_CHANNEL!"=="!CHANNEL!" (
+    echo [ERROR] Failed to write channel into %CONFIG_FILE%. Aborting.
+    goto end_script
+)
 
 REM --- 2b. Read it back and verify the edit actually took effect ---
 REM This guarantees the version compiled into the exe matches the version we upload.
@@ -81,7 +99,7 @@ python -c "import comtypes.client; comtypes.client.GetModule('UIAutomationCore.d
 REM --- 5. Build agent ---
 echo.
 echo 5. Building Agent Executable (v!NEW_VERSION!)...
-pyinstaller --noconfirm --name "DCU_MonitoringAgent" --noconsole --onefile --paths=. --collect-submodules=agent --hidden-import="yaml" --hidden-import="pydantic" --hidden-import="pystray" --hidden-import="PIL" --hidden-import="requests" --hidden-import="win32timezone" --hidden-import="comtypes.gen.UIAutomationClient" --add-data "config\agent_config.yaml;config" --clean agent\main.py
+pyinstaller --noconfirm --name "DCU_MonitoringAgent" --noconsole --onefile --paths=. --collect-submodules=agent --hidden-import="yaml" --hidden-import="pydantic" --hidden-import="pystray" --hidden-import="PIL" --hidden-import="requests" --hidden-import="win32timezone" --hidden-import="win32com.client" --hidden-import="comtypes.gen.UIAutomationClient" --add-data "config\agent_config.yaml;config" --clean agent\main.py
 
 REM --- 6. Create ZIP package ---
 echo.
@@ -100,14 +118,15 @@ if "!SKIP_UPLOAD!"=="1" (
 echo.
 echo 7. Uploading to OTA server...
 powershell -NoProfile -Command ^
-  "$ver='!NEW_VERSION!'; $url='%SERVER_URL%/api/ota/upload'; $key='%API_KEY%'; $exe='dist\DCU_MonitoringAgent.exe'; " ^
+  "$ver='!NEW_VERSION!'; $chan='!CHANNEL!'; $url='%SERVER_URL%/api/ota/upload'; $key='%API_KEY%'; $exe='dist\DCU_MonitoringAgent.exe'; " ^
   "try { " ^
   "  Add-Type -AssemblyName System.Net.Http; " ^
   "  $client = New-Object System.Net.Http.HttpClient; " ^
   "  $client.DefaultRequestHeaders.Add('X-API-Key', $key); " ^
   "  $form = New-Object System.Net.Http.MultipartFormDataContent; " ^
   "  $form.Add((New-Object System.Net.Http.StringContent($ver)), 'version'); " ^
-  "  $form.Add((New-Object System.Net.Http.StringContent('Build v'+$ver)), 'release_notes'); " ^
+  "  $form.Add((New-Object System.Net.Http.StringContent('Build v'+$ver+' ['+$chan+']')), 'release_notes'); " ^
+  "  $form.Add((New-Object System.Net.Http.StringContent($chan)), 'channel'); " ^
   "  $fs = [System.IO.File]::OpenRead((Resolve-Path $exe)); " ^
   "  $sc = New-Object System.Net.Http.StreamContent($fs); " ^
   "  $sc.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse('application/octet-stream'); " ^
@@ -121,8 +140,9 @@ powershell -NoProfile -Command ^
 
 :build_success
 echo ========================================================
-echo Build Successful! (v%NEW_VERSION%)
+echo Build Successful! (v%NEW_VERSION% / channel %CHANNEL%)
 echo [Distribution File]: dist\DCU_MonitoringAgent_Setup.zip
+if "%CHANNEL%"=="develop" echo [NOTE] develop build: only PCs installed from this exe ^(channel develop^) will receive it via OTA.
 echo ========================================================
 goto end_script
 
