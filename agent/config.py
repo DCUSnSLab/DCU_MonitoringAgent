@@ -101,10 +101,17 @@ class WindowTitleConfig(BaseModel):
     )
 
 
+class InputActivityConfig(BaseModel):
+    """입력 활동의 1초 집계 및 일별 CSV 저장 설정"""
+    enabled: bool = False
+    output_dir: str = "data/input_activity"
+
+
 class MonitoringConfig(BaseModel):
     """모니터링 통합 설정"""
     interval_seconds: int = 5
     track_foreground: bool = True
+    input_activity: InputActivityConfig = Field(default_factory=InputActivityConfig)
     process: ProcessConfig = Field(default_factory=ProcessConfig)
     chrome: ChromeConfig = Field(default_factory=ChromeConfig)
     messenger: MessengerConfig = Field(default_factory=MessengerConfig)

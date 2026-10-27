@@ -72,7 +72,7 @@ REM --- 4. Install packaging tools ---
 echo.
 echo 4. Checking Packaging Tools...
 call .\venv\Scripts\activate
-pip install pyinstaller pyyaml pydantic pystray pillow requests pypiwin32 comtypes
+pip install pyinstaller pyyaml pydantic pystray pillow requests pypiwin32 comtypes "pynput>=1.7.6,<2.0"
 
 REM Generate the UI Automation wrapper (comtypes.gen.UIAutomationClient) so it can be bundled.
 REM The agent reads browser address bars through it; without it the exe would generate it at startup.
@@ -81,7 +81,7 @@ python -c "import comtypes.client; comtypes.client.GetModule('UIAutomationCore.d
 REM --- 5. Build agent ---
 echo.
 echo 5. Building Agent Executable (v!NEW_VERSION!)...
-pyinstaller --noconfirm --name "DCU_MonitoringAgent" --noconsole --onefile --paths=. --collect-submodules=agent --hidden-import="yaml" --hidden-import="pydantic" --hidden-import="pystray" --hidden-import="PIL" --hidden-import="requests" --hidden-import="win32timezone" --hidden-import="comtypes.gen.UIAutomationClient" --add-data "config\agent_config.yaml;config" --clean agent\main.py
+pyinstaller --noconfirm --name "DCU_MonitoringAgent" --noconsole --onefile --paths=. --collect-submodules=agent --hidden-import="pynput.keyboard._win32" --hidden-import="pynput.mouse._win32" --hidden-import="yaml" --hidden-import="pydantic" --hidden-import="pystray" --hidden-import="PIL" --hidden-import="requests" --hidden-import="win32timezone" --hidden-import="comtypes.gen.UIAutomationClient" --add-data "config\agent_config.yaml;config" --clean agent\main.py
 
 REM --- 6. Create ZIP package ---
 echo.

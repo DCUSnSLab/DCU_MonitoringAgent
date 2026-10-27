@@ -22,6 +22,7 @@ if PROJECT_ROOT not in sys.path:
 from agent.config import ConfigManager
 from agent.utils.logger import setup_logger, get_logger
 from agent.collectors.data_collector import DataCollector
+from agent.collectors.input_collector import InputCollector
 from agent.network.api_client import ApiClient
 
 try:
@@ -81,6 +82,7 @@ class MonitoringAgent:
         self._data_collector: DataCollector = None
         self._api_client: ApiClient = None
         self._updater: OTAUpdater = None
+        self._input_collector = None
 
     @property
     def config(self):
@@ -146,6 +148,27 @@ class MonitoringAgent:
         )
         self._monitor_thread.start()
         self._log.info("모니터링 스레드 시작됨")
+        self._start_input_collection()
+
+    def _start_input_collection(self):
+        input_cfg = self._config.monitoring.input_activity
+        if not input_cfg.enabled:
+            return
+        output_dir = input_cfg.output_dir
+        if not os.path.isabs(output_dir):
+            base = PROJECT_ROOT
+            if getattr(sys, 'frozen', False):
+                base = os.path.join(
+                    os.environ.get('LOCALAPPDATA', os.environ.get('APPDATA', '.')),
+                    'DCU_MonitoringAgent',
+                )
+            output_dir = os.path.join(base, output_dir)
+        try:
+            self._input_collector = InputCollector(output_dir, self._config.agent.id)
+            self._input_collector.start()
+        except Exception:
+            self._log.exception("입력 활동 수집 시작 실패")
+            self._input_collector = None
 
     def stop(self, password: str = None):
         """
@@ -160,6 +183,9 @@ class MonitoringAgent:
 
         self._log.info("에이전트 종료 중...")
         self._running = False
+
+        if self._input_collector:
+            self._input_collector.stop()
 
         # 1. 모니터링 관련 스레드가 보고서를 보내는 작업을 완전히 끝내도록 대기
         if self._monitor_thread and self._monitor_thread.is_alive():

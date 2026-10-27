@@ -10,6 +10,10 @@ monitoring:
   interval_seconds: 1
   track_foreground: true
 
+  input_activity:
+    enabled: true
+    output_dir: "data/input_activity"
+
   process:
     mode: "all"
     whitelist:

@@ -2,6 +2,7 @@
 psutil>=5.9.0
 wmi>=1.5.1
 pywin32>=306
+pynput>=1.7.6,<2.0      # 입력 활동 집계 (키 내용은 저장하지 않음)
 comtypes>=1.4.0          # 브라우저 주소창 URL 읽기 (UI Automation)
 
 # Data Validation (pydantic v1 - Python 3.7 compatible)
