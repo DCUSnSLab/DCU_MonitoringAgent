@@ -68,6 +68,37 @@ html, body {
 
 /* ─── 공통 유틸리티 ─── */
 .mono { font-family: 'JetBrains Mono', monospace; }
+.access-management h1 { font-size: 24px; margin-bottom: 8px; }
+.access-description { color: var(--text-secondary); margin-bottom: 20px; }
+.access-help { display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 16px; margin: 20px 0;
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md); color: var(--text-secondary); }
+.access-help strong { color: var(--text-primary); margin-right: 8px; }
+.access-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 20px 0; }
+.access-toolbar input { flex: 1; min-width: 220px; }
+.access-management input:not([type=checkbox]), .access-management select { background: var(--bg-surface);
+  color: var(--text-primary); border: 1px solid var(--border-strong); padding: 9px 12px; border-radius: var(--radius-sm); }
+.access-management button { background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-strong);
+  padding: 8px 14px; border-radius: var(--radius-sm); cursor: pointer; }
+.access-management button:hover:not(:disabled) { background: var(--accent); }
+.access-management button:disabled { opacity: .4; cursor: default; }
+.access-management button:focus-visible, .access-management select:focus-visible, .access-management input:focus-visible {
+  outline: 2px solid var(--accent-light); outline-offset: 2px; }
+.access-table { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-surface); }
+.access-table table { width: 100%; border-collapse: collapse; text-align: left; }
+.access-table th, .access-table td { padding: 16px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.access-table th { background: var(--bg-elevated); color: var(--text-secondary); font-size: 12px; }
+.access-table td > div { color: var(--text-secondary); font-size: 12px; }
+.access-table .admin-sub { color: var(--text-muted); font-size: 11px; }
+.admin-self { font-size: 11px; color: var(--accent-light); margin-left: 5px; }
+.access-status { display: inline-block; padding: 3px 9px; border-radius: 5px; font-size: 12px; background: var(--unknown-bg); }
+.access-status.admin { background: rgba(59,130,246,.15); color: var(--accent-light); }
+.access-status.viewer { background: var(--safe-bg); color: var(--safe); }
+.access-status.pending { background: var(--warning-bg); color: var(--warning); }
+.access-status.disabled { background: var(--danger-bg); color: var(--danger); }
+.access-enabled { display: flex; gap: 6px; align-items: center; }
+.access-error { background: var(--danger-bg); color: var(--danger); padding: 12px; margin-bottom: 16px; border-radius: var(--radius-sm); }
+.access-notice { background: var(--safe-bg); color: var(--safe); padding: 12px; margin-bottom: 16px; border-radius: var(--radius-sm); }
+.access-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin: 20px 0; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ─── 레이아웃 ─── */

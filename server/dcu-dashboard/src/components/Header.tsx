@@ -42,6 +42,11 @@ export default function Header({ children }: { children?: React.ReactNode }) {
         {session && (
           <div className="header-user">
             <span>{session.username}</span>
+            {session.role === 'admin' && (
+              <Link href="/admin" className={`nav-tab ${pathname.startsWith('/admin') ? 'active' : ''}`}>
+                관리
+              </Link>
+            )}
             {/* 로그인 정보를 지우면 로그인 화면으로 이동 (AuthGate) */}
             <button type="button" className="logout-btn" onClick={() => {
               setLogoutError('');
