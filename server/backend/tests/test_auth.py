@@ -22,6 +22,7 @@ PASSWORD = "test-password!"
 @pytest.fixture(autouse=True)
 def admin_account(monkeypatch):
     """테스트용 관리자 계정 (운영 비밀번호는 코드에 없음)."""
+    monkeypatch.setattr(settings, "dashboard_auth_mode", "local")
     monkeypatch.setattr(settings, "dashboard_admin_username", "admin")
     monkeypatch.setattr(settings, "dashboard_admin_password", PASSWORD)
     monkeypatch.setattr(settings, "dashboard_token_secret", "test-secret")

@@ -2,6 +2,7 @@
 서버 설정 (환경변수 기반)
 """
 from pydantic_settings import BaseSettings
+from typing import Literal
 
 
 class Settings(BaseSettings):
@@ -45,6 +46,17 @@ class Settings(BaseSettings):
     dashboard_token_secret: str = ""
     # 로그인 유지 시간(시간)
     dashboard_token_ttl_hours: int = 12
+
+    dashboard_auth_mode: Literal["local", "sso"] = "local"
+    dashboard_frontend_url: str = "http://localhost:3000"
+    dashboard_cookie_secure: bool = False  # 운영 HTTPS에서는 True
+    sso_issuer: str = "https://code.cu.ac.kr/sso"
+    sso_internal_base: str = ""  # 비어 있으면 issuer 사용
+    sso_client_id: str = "agent-monitoring"
+    sso_client_secret: str = ""
+    sso_redirect_uri: str = "http://localhost:8000/api/auth/callback"
+    # Fernet 키. refresh token을 DB에 암호화하여 저장 (재시작 후에도 같은 키 필요).
+    sso_token_encryption_key: str = ""
 
     class Config:
         env_file = ".env"

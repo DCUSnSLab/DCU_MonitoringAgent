@@ -15,6 +15,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from app.services import auth_service
+from app.config import settings
+from app.database import get_db
+from app.services import sso_service
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +45,14 @@ def _unauthorized(detail: str = "로그인이 필요합니다") -> HTTPException
     return HTTPException(status_code=401, detail=detail, headers={"WWW-Authenticate": "Bearer"})
 
 
-async def require_dashboard_user(authorization: str = Header(default="")) -> str:
+async def require_dashboard_user(request: Request, authorization: str = Header(default=""),
+                                 db: AsyncSession = Depends(get_db)) -> str:
     """대시보드·통계 API 보호: 유효한 로그인 토큰이 있어야 통과. 아이디를 돌려준다."""
+    if settings.dashboard_auth_mode == "sso":
+        user = await sso_service.session_user(db, request.cookies.get(sso_service.COOKIE, ""))
+        if user is None:
+            raise _unauthorized()
+        return user.username
     scheme, _, token = authorization.partition(" ")
     username = auth_service.verify_token(token.strip()) if scheme.lower() == "bearer" else None
     if username is None:
@@ -53,6 +63,8 @@ async def require_dashboard_user(authorization: str = Header(default="")) -> str
 @router.post("/login", response_model=LoginResponse)
 async def login(req: LoginRequest, request: Request):
     """관리자 로그인"""
+    if settings.dashboard_auth_mode != "local":
+        raise HTTPException(status_code=404, detail="SSO 로그인을 사용하세요")
     if not auth_service.is_configured():
         raise HTTPException(status_code=503, detail="서버에 관리자 비밀번호가 설정되지 않아 로그인할 수 없습니다")
 
