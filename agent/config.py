@@ -262,11 +262,26 @@ class ConfigManager:
                     print(f"[Config] Error syncing config from update: {e}")
                     pass
 
-        # 에이전트 ID가 비어있으면 자동 생성
-        if not self._config.agent.id:
+        # 에이전트 ID: 물리 랜카드 MAC 으로 고정 계산한 값을 쓴다 (설정 파일이 지워져도 같은 PC 면 같은 ID).
+        # 못 구하면 저장된 ID 를 쓰고, 그것도 없으면 예비 ID 를 만든다.
+        derived_id = self._derive_agent_id()
+        if derived_id and derived_id != self._config.agent.id:
+            if self._config.agent.id:
+                print(f"[Config] 에이전트 ID 를 물리 랜카드 기준으로 변경: {self._config.agent.id} → {derived_id}")
+            self._config.agent.id = derived_id
+            self._save_quietly()
+        elif not self._config.agent.id:
             self._config.agent.id = self._generate_agent_id()
+            self._save_quietly()
 
         return self._config
+
+    def _save_quietly(self) -> None:
+        if getattr(self, "_config_path", None):
+            try:
+                self.save()
+            except Exception as e:
+                print(f"[Config] 설정 저장 실패: {e}")
 
     def _sync_policy_lists(self, builtin_raw: dict) -> bool:
         """번들 설정에 있는 탐지 정책 목록으로 현재 설정을 덮어씁니다. 바뀐 항목이 있으면 True.
@@ -306,15 +321,21 @@ class ConfigManager:
         return self.load()
 
     @staticmethod
+    def _derive_agent_id() -> str:
+        """물리 랜카드 MAC 기준 고정 ID (agent.utils.machine_id). 못 구하면 빈 문자열."""
+        try:
+            from agent.utils.machine_id import derive_agent_id
+            return derive_agent_id()
+        except Exception as e:
+            print(f"[Config] 물리 랜카드 MAC 조회 실패: {e}")
+            return ""
+
+    @staticmethod
     def _generate_agent_id() -> str:
-        """MAC 주소 기반 에이전트 ID를 생성합니다."""
+        """예비 에이전트 ID (물리 랜카드를 못 찾았을 때만). uuid.getnode 는 아무 어댑터나 고르므로 고정값이 아니다."""
         try:
             mac = uuid.getnode()
-            mac_str = ":".join(
-                f"{(mac >> (8 * i)) & 0xFF:02X}" for i in reversed(range(6))
-            )
             hostname = os.environ.get("COMPUTERNAME", "UNKNOWN")
-            mac_short = mac_str.replace(":", "")[-6:]
-            return f"{hostname}-{mac_short}"
+            return f"{hostname}-{mac & 0xFFFFFF:06X}"
         except Exception:
             return f"AGENT-{uuid.uuid4().hex[:8].upper()}"
