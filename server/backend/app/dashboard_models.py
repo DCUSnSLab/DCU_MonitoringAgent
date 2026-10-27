@@ -32,3 +32,14 @@ class DashboardLogin(Base):
     nonce: Mapped[str] = mapped_column(String(128))
     verifier: Mapped[str] = mapped_column(String(128))
     expires_at: Mapped[int] = mapped_column(Integer, index=True)
+
+
+class DashboardAccessLog(Base):
+    __tablename__ = "dashboard_access_logs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    actor: Mapped[str] = mapped_column(String(64))
+    target_sub: Mapped[str] = mapped_column(String(36), index=True)
+    previous_role: Mapped[str] = mapped_column(String(16))
+    role: Mapped[str] = mapped_column(String(16))
+    enabled: Mapped[bool] = mapped_column(Boolean)
+    changed_at: Mapped[int] = mapped_column(Integer)
