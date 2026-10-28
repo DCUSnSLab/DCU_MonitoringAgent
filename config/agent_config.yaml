@@ -4,7 +4,7 @@
 agent:
   id: ""                        # auto-generate
   lab_name: "lab1"
-  version: "1.0.31"
+  version: "1.1.0"
   channel: "stable"             # OTA channel: stable(all lab PCs) / develop(dev PCs) - set by build_agent.bat
 
 monitoring:
