@@ -8,6 +8,7 @@ Pydantic v1 모델로 설정 값의 유효성을 검증합니다.
 import os
 import sys
 import uuid
+import psutil
 import yaml
 from typing import List, Optional
 from pydantic import BaseModel, Field
@@ -309,12 +310,20 @@ class ConfigManager:
     def _generate_agent_id() -> str:
         """MAC 주소 기반 에이전트 ID를 생성합니다."""
         try:
-            mac = uuid.getnode()
-            mac_str = ":".join(
-                f"{(mac >> (8 * i)) & 0xFF:02X}" for i in reversed(range(6))
+            interfaces = psutil.net_if_addrs()
+            mac_str = next(
+                (addr.address for name in ("이더넷", "Ethernet")
+                 for addr in interfaces.get(name, [])
+                 if addr.family == psutil.AF_LINK and addr.address),
+                "",
             )
+            if not mac_str:
+                mac = uuid.getnode()
+                mac_str = ":".join(
+                    f"{(mac >> (8 * i)) & 0xFF:02X}" for i in reversed(range(6))
+                )
             hostname = os.environ.get("COMPUTERNAME", "UNKNOWN")
-            mac_short = mac_str.replace(":", "")[-6:]
+            mac_short = mac_str.replace(":", "").replace("-", "")[-6:].upper()
             return f"{hostname}-{mac_short}"
         except Exception:
             return f"AGENT-{uuid.uuid4().hex[:8].upper()}"
