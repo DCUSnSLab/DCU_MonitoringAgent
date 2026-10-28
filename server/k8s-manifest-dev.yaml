@@ -2,7 +2,7 @@
 # develop 브랜치를 Jenkins 가 빌드해 올리는 검증용 서버. 운영(dcu-agent-monitor)과 완전히 분리된 네임스페이스·DB·OTA 저장소.
 #   백엔드  : http://203.250.35.27:30086   (운영 30085)
 #   대시보드: http://203.250.33.67:30031   (운영 30030)
-# 이미지는 Harbor 의 :develop 태그. Jenkins(develop 브랜치)가 이 파일을 저장소에서 바로 apply 하고 rollout restart 한다.
+# 이미지는 Harbor 의 :develop 태그. 루트 Jenkinsfile(멀티브랜치, develop 브랜치)이 이 파일을 저장소에서 바로 apply 하고, 소스가 바뀐 서비스만 재시작한다.
 # 대시보드 로그인은 이 네임스페이스에 Secret 이 있어야 한다 (없으면 백엔드는 뜨지만 로그인 불가):
 #   kubectl -n dcu-agent-monitor-dev create secret generic dcu-dashboard-auth \
 #     --from-literal=DASHBOARD_ADMIN_PASSWORD='<비밀번호>' \
