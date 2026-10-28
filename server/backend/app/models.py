@@ -196,6 +196,8 @@ class OTARelease(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     version: Mapped[str] = mapped_column(String(32), unique=True, nullable=False, index=True)
+    # 배포 채널: stable(실습실 전체) / develop(개발용 PC). 에이전트는 자기 채널의 최신 버전만 받는다
+    channel: Mapped[str] = mapped_column(String(16), nullable=False, default="stable", server_default="stable", index=True)
     filename: Mapped[str] = mapped_column(String(256), nullable=False)
     checksum: Mapped[str] = mapped_column(String(128), nullable=False)  # sha256
     file_size: Mapped[int] = mapped_column(Integer, default=0)

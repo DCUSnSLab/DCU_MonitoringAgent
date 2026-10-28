@@ -173,6 +173,88 @@ DCU_MonitoringAgent/
 .\venv\Scripts\pytest.exe tests\ -v
 ```
 
+## 브랜치 · 배포 전략
+
+aibootcamp 와 같은 방식으로 운영합니다.
+
+| 브랜치 | 용도 | Jenkins 동작 (루트 `Jenkinsfile`, 멀티브랜치 파이프라인) |
+|---|---|---|
+| `develop` | 기본 작업 브랜치. 기능 브랜치(`GEN-N-설명`)는 여기로 PR | 서버 테스트 → 이미지 빌드·Harbor `develop` 태그 푸시 → **develop 환경** 배포 |
+| `main` | 릴리즈 브랜치. `develop` → `main` PR 로만 반영 | 서버 테스트 → 이미지 빌드·`latest` 푸시 → **운영** 배포 |
+| 그 외 (`GEN-*`, PR) | 기능 작업 | 서버 테스트 + 대시보드 빌드 확인만 (푸시·배포 안 함) |
+
+| 환경 | 네임스페이스 | 백엔드 | 대시보드 | 매니페스트 |
+|---|---|---|---|---|
+| 운영 | `dcu-agent-monitor` | http://203.250.35.27:30085 | http://203.250.33.67:30030 | Jenkins 호스트의 `/services/dcuclassagent/k8s-manifest.yaml` (저장소 `server/k8s-manifest.yaml` 과 맞춰 둘 것) |
+| develop | `dcu-agent-monitor-dev` | http://203.250.35.27:30086 | http://203.250.33.67:30031 | 저장소 `server/k8s-manifest-dev.yaml` (Jenkins 가 바로 apply) |
+
+- 두 환경은 DB·OTA 저장소까지 분리돼 있어 develop 배포는 운영에 영향을 주지 않습니다.
+- 배포 때 **바뀐 서비스만 재시작**합니다. 비교 기준은 이미지에 들어가는 소스(백엔드: `app/`·`Dockerfile`·`requirements.txt`·`constraints.txt`,
+  대시보드: `server/dcu-dashboard` 전체)와 매니페스트 파일입니다. 대시보드만 고친 배포에서는 백엔드가 재시작되지 않아
+  수업 중에도 메모리 상태(DANGER 유지 등)가 초기화되거나 보고가 끊기지 않고, 테스트만 고친 커밋은 아무것도 재시작하지 않습니다.
+  매니페스트(ConfigMap 등)가 바뀌면 두 서비스 모두 재시작해 새 설정을 읽습니다.
+  (지난 배포의 기준값은 Deployment 주석 `dcu-monitoring/source-tree` 에 기록)
+- **저장소 밖에서 바꾼 설정**(Secret 생성·변경 등)은 위 기준에 잡히지 않으므로, Jenkins 에서 `FORCE_RESTART` 를 켜고 빌드해야 반영됩니다.
+- 이미지 태그: 배포마다 불변 태그 `<브랜치>-<빌드번호>-<커밋>` 을 푸시하고, 실제로 재시작하는 서비스만 환경 태그(`latest` / `develop`)를 그 이미지로 옮깁니다.
+
+#### Jenkins 잡 설정 (멀티브랜치 파이프라인, 한 번만)
+
+1. Jenkins → 새 Item → **Multibranch Pipeline** (예: `dcu-monitoring`)
+2. Branch Sources → GitHub, 저장소 `DCUSnSLab/DCU_MonitoringAgent`, 자격 증명은 aibootcamp 잡과 동일. Behaviours 는 기본값에서 두 가지를 바꿉니다.
+   - **Discover branches → Strategy: `All branches`**
+     기본값(`Exclude branches that are also filed as PRs`)이면 develop → main 릴리즈 PR 이 열려 있는 동안 develop 잡이 빠져 develop 환경 배포가 멈춥니다.
+   - **Discover pull requests from forks 삭제**
+     저장소가 공개라서, 남아 있으면 누구든 fork PR 을 열어 배포용 에이전트에서 자기 Dockerfile·스크립트를 실행할 수 있습니다.
+     (Discover pull requests from origin 은 그대로 두어도 됩니다 — PR 은 테스트만 함)
+3. Build Configuration → by Jenkinsfile, Script Path `Jenkinsfile` (저장소 루트)
+4. Scan Multibranch Pipeline Triggers 또는 GitHub 웹훅으로 푸시 시 자동 빌드
+5. 기존 단일 파이프라인 잡 2개(backend, frontend)에서 옮겨 오는 순서
+   예전 `server/backend/Jenkinsfile`, `server/dcu-dashboard/Jenkinsfile` 은 루트 Jenkinsfile 로 합쳐져 develop 에서 지워졌습니다.
+   1. 위 1~4 로 멀티브랜치 잡을 만든다 (develop 이 빌드되며 develop 환경이 생김)
+   2. 옛 잡의 브랜치 지정자는 `*/main` 만 둔다 (`*/develop` 을 넣어 두었다면 develop 푸시마다 "Jenkinsfile 없음"으로 실패)
+   3. develop → main 머지 직후 옛 잡 2개를 비활성화·삭제한다 (그 뒤 main 은 멀티브랜치 잡이 배포)
+   옛 잡을 계속 두면 main 에 머지된 뒤 "Jenkinsfile 없음"으로 실패합니다 (운영에는 영향 없이 배포만 안 됨).
+- develop 환경 대시보드 로그인은 `dcu-agent-monitor-dev` 네임스페이스에 Secret 을 한 번 만들어야 합니다 (명령은 `server/k8s-manifest-dev.yaml` 머리 주석 참고).
+  만든 뒤에는 `FORCE_RESTART` 로 develop 을 한 번 빌드해야 백엔드가 Secret 을 읽습니다.
+
+#### 롤백
+
+- 기본: 문제가 된 커밋을 `git revert` 해서 해당 브랜치에 푸시합니다. 소스가 바뀌므로 파이프라인이 다시 빌드하고 재시작합니다.
+- 급할 때(빌드를 기다릴 수 없을 때): 이전 불변 태그를 환경 태그로 되돌리고 kubectl 로 직접 재시작합니다.
+  ```bash
+  docker pull harbor.cu.ac.kr/dcuclassagent/backend:main-41-1a2b3c4
+  docker tag harbor.cu.ac.kr/dcuclassagent/backend:main-41-1a2b3c4 harbor.cu.ac.kr/dcuclassagent/backend:latest
+  docker push harbor.cu.ac.kr/dcuclassagent/backend:latest
+  kubectl -n dcu-agent-monitor rollout restart deploy/backend
+  ```
+  이후 원인 수정을 머지하면 파이프라인이 다시 최신으로 맞춥니다. (Jenkins 로 옛 빌드를 재실행하는 방식은 `latest` 를 다시 덮어쓰므로 쓰지 않습니다)
+
+### 에이전트 배포 채널 (stable / develop)
+
+에이전트 빌드는 Jenkins 가 아니라 Windows PC 에서 `build_agent.bat` 로 만들고 서버에 올립니다(OTA).
+릴리즈에는 **채널**이 있어, 각 PC 는 자기 채널의 최신 버전만 받습니다.
+
+| 채널 | 보고·업데이트 서버 | 받는 PC | 쓰임 |
+|---|---|---|---|
+| `stable` | 운영 (30085) | 실습실 전체 PC (기본, 구버전 에이전트 포함) | 검증이 끝난 정식 배포 |
+| `develop` | develop 환경 (30086) | develop 빌드로 설치한 PC 만 | 실습실에 영향 없이 새 버전을 먼저 시험 |
+
+develop 빌드는 **develop 서버를 바라보도록** 서버 주소까지 exe 에 구워집니다. 그래서 시험 PC 의 보고는 develop 대시보드(30031)에만 나타나고, 업데이트도 develop 서버에서만 받습니다.
+
+```bat
+REM develop 채널로 빌드·업로드 (버전은 1.0.31-dev1 처럼 stable 과 겹치지 않게)
+build_agent.bat develop
+
+REM stable 채널로 빌드·업로드 (인자 없이 실행하면 프롬프트에서 선택, Enter = stable)
+build_agent.bat stable
+```
+
+- 채널과 서버 주소는 exe 에 구워지며(`config/agent_config.yaml` 의 `agent.channel`, `server.base_url`/`ws_url`), 빌드 스크립트가 선택한 채널에 맞춰 기록합니다.
+  develop 빌드 뒤 `channel: "develop"`·30086 주소가 남은 설정 파일은 커밋하지 마세요 (stable 빌드를 한 번 돌리면 원래대로 돌아옵니다).
+- 시험용 PC 를 develop 채널에 넣으려면 그 PC 에 develop 빌드의 `DCU_MonitoringAgent_Setup.zip` 을 한 번 수동 설치합니다. 이후 develop 업로드를 OTA 로 받습니다.
+- develop PC 를 다시 stable 로 돌리려면 stable 빌드를 수동 설치합니다.
+- 서버에서 채널별 최신 버전 확인: `GET /api/ota/latest?channel=develop` (기본은 stable).
+
 ## 라이선스
 
 MIT License

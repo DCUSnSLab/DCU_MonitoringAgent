@@ -126,6 +126,7 @@ class StatusReport(BaseModel):
     mac_address: str = ""
     timestamp: datetime = Field(default_factory=datetime.now)
     agent_version: str = ""
+    channel: str = "stable"  # OTA 배포 채널 (서버는 이 채널의 최신 버전만 안내)
     user_state: UserState = UserState.SAFE
     system_info: SystemInfo = Field(default_factory=SystemInfo)
     processes: List[ProcessInfo] = Field(default_factory=list)

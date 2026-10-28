@@ -1,0 +1,203 @@
+# ─── develop 환경 (dcu-agent-monitor-dev) ───────────────────────
+# develop 브랜치를 Jenkins 가 빌드해 올리는 검증용 서버. 운영(dcu-agent-monitor)과 완전히 분리된 네임스페이스·DB·OTA 저장소.
+#   백엔드  : http://203.250.35.27:30086   (운영 30085)
+#   대시보드: http://203.250.33.67:30031   (운영 30030)
+# 이미지는 Harbor 의 :develop 태그. 루트 Jenkinsfile(멀티브랜치, develop 브랜치)이 이 파일을 저장소에서 바로 apply 하고, 소스가 바뀐 서비스만 재시작한다.
+# 대시보드 로그인은 이 네임스페이스에 Secret 이 있어야 한다 (없으면 백엔드는 뜨지만 로그인 불가):
+#   kubectl -n dcu-agent-monitor-dev create secret generic dcu-dashboard-auth \
+#     --from-literal=DASHBOARD_ADMIN_PASSWORD='<비밀번호>' \
+#     --from-literal=DASHBOARD_TOKEN_SECRET="$(openssl rand -hex 32)"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dcu-agent-monitor-dev
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dcu-config
+  namespace: dcu-agent-monitor-dev
+data:
+  DATABASE_URL: "postgresql+asyncpg://dcu:dcu1234@postgres-svc:5432/dcu_monitoring"
+  API_KEY: "dcu-secret-key-change-in-production"
+  CORS_ORIGINS: '["http://localhost:3000","http://203.250.33.67:30031","*"]'
+  OTA_FILES_DIR: "/app/ota_files"
+  TZ: "Asia/Seoul"
+  NEXT_PUBLIC_API_URL: "http://203.250.35.27:30086"
+  NEXT_PUBLIC_WS_URL: "ws://203.250.35.27:30086"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: dcu-agent-monitor-dev
+spec:
+  storageClassName: "openebs-hostpath"
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ota-files-pvc
+  namespace: dcu-agent-monitor-dev
+spec:
+  storageClassName: "openebs-hostpath"
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+# ─── PostgreSQL ─────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: dcu-agent-monitor-dev
+spec:
+  replicas: 1
+  # 같은 데이터 디렉터리에 postgres 두 개가 겹쳐 뜨지 않도록 (RollingUpdate 금지)
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: harbor.cu.ac.kr/postgresql/postgresql-16.3-huge-pages:latest
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: "dcu"
+            - name: POSTGRES_PASSWORD
+              value: "dcu1234"
+            - name: POSTGRES_DB
+              value: "dcu_monitoring"
+            - name: TZ
+              value: "Asia/Seoul"
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-svc
+  namespace: dcu-agent-monitor-dev
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+# ─── FastAPI 백엔드 ─────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: dcu-agent-monitor-dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: harbor.cu.ac.kr/dcuclassagent/backend:develop
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: dcu-config
+            - secretRef:
+                name: dcu-dashboard-auth
+                optional: true
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: ota-files
+              mountPath: /app/ota_files
+      volumes:
+        - name: ota-files
+          persistentVolumeClaim:
+            claimName: ota-files-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-svc
+  namespace: dcu-agent-monitor-dev
+spec:
+  type: NodePort
+  selector:
+    app: backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30086
+---
+# ─── Next.js 대시보드 ───────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: dcu-agent-monitor-dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: harbor.cu.ac.kr/dcuclassagent/frontend:develop
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+          env:
+            - name: TZ
+              value: "Asia/Seoul"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-svc
+  namespace: dcu-agent-monitor-dev
+spec:
+  type: NodePort
+  selector:
+    app: frontend
+  ports:
+    - port: 3000
+      targetPort: 3000
+      nodePort: 30031

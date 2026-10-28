@@ -12,7 +12,6 @@ import os
 import sys
 from datetime import datetime
 from unittest.mock import MagicMock
-from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -117,39 +116,33 @@ class TestSendReport:
         assert "favicon_url" not in saved["browser_details"]["chrome"]["tabs"][0]
 
 
-def test_mac_shared_with_id_and_cached_across_reports(monkeypatch):
-    import psutil
-    ConfigManager.get_mac_address.cache_clear()
-    addresses = MagicMock(return_value={"Ethernet": [
-        SimpleNamespace(family=psutil.AF_LINK, address="00-11-22-AA-BB-CC"),
-    ]})
-    monkeypatch.setattr(psutil, "net_if_addrs", addresses)
+def test_physical_mac_shared_with_id_and_cached_across_reports(monkeypatch):
+    from agent.utils import machine_id
+    addresses = MagicMock(return_value="001122AABBCC")
+    monkeypatch.setattr(machine_id, "get_physical_mac", addresses)
     monkeypatch.setenv("COMPUTERNAME", "TEST-PC")
     for name in ("ProcessMonitor", "WindowMonitor", "ChromeMonitor", "AddressBarMonitor", "WindowTitleDetector"):
         monkeypatch.setattr("agent.collectors.data_collector." + name, MagicMock())
     monkeypatch.setattr(DataCollector, "_get_local_ip", staticmethod(lambda: "127.0.0.1"))
-    try:
-        config = AppConfig()
-        config.agent.id = ConfigManager._generate_agent_id()
-        collector = DataCollector(config)
-        collector._process_monitor.get_system_info.return_value = SystemInfo()
-        collector._process_monitor.collect.return_value = ([], [])
-        collector._window_monitor.get_window_titles_by_pid.return_value = {}
-        collector._window_monitor.get_foreground_pid.return_value = None
-        collector._window_monitor.get_foreground_window.return_value = None
-        collector._window_monitor.get_visible_windows.return_value = []
-        collector._chrome_monitor.collect.return_value = (ChromeInfo(), [])
-        collector._browser_window_alerts = MagicMock(return_value=[])
-        first, second = collector.collect(), collector.collect()
-        assert first.agent_id == second.agent_id == "TEST-PC-AABBCC"
-        assert first.mac_address == second.mac_address == "00:11:22:AA:BB:CC"
-        collector._get_local_ip = MagicMock(return_value="203.250.35.10")
-        collector.refresh_ip_address()
-        assert collector.collect().ip_address == "203.250.35.10"
-        assert first.ip_address == "127.0.0.1"  # 과거 보고서는 변경하지 않는다.
-        addresses.assert_called_once()
-    finally:
-        ConfigManager.get_mac_address.cache_clear()
+    config = AppConfig()
+    config.agent.id = ConfigManager._derive_agent_id()
+    collector = DataCollector(config)
+    collector._process_monitor.get_system_info.return_value = SystemInfo()
+    collector._process_monitor.collect.return_value = ([], [])
+    collector._window_monitor.get_window_titles_by_pid.return_value = {}
+    collector._window_monitor.get_foreground_pid.return_value = None
+    collector._window_monitor.get_foreground_window.return_value = None
+    collector._window_monitor.get_visible_windows.return_value = []
+    collector._chrome_monitor.collect.return_value = (ChromeInfo(), [])
+    collector._browser_window_alerts = MagicMock(return_value=[])
+    first, second = collector.collect(), collector.collect()
+    assert first.agent_id == second.agent_id == "TEST-PC-AABBCC"
+    assert first.mac_address == second.mac_address == "00:11:22:AA:BB:CC"
+    collector._get_local_ip = MagicMock(return_value="203.250.35.10")
+    collector.refresh_ip_address()
+    assert collector.collect().ip_address == "203.250.35.10"
+    assert first.ip_address == "127.0.0.1"  # 과거 보고서는 변경하지 않는다.
+    assert addresses.call_count == 2  # ID 생성과 수집기 초기화 때만 조회
 
 
 def test_reconnect_refreshes_ip_before_replaying_buffer(tmp_path, monkeypatch):

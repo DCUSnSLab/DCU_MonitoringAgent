@@ -84,6 +84,7 @@ class StatusReportRequest(BaseModel):
     mac_address: str = ""
     timestamp: Optional[datetime] = None
     agent_version: str = ""
+    channel: str = "stable"  # OTA 배포 채널 (구버전 에이전트는 보내지 않음 → stable)
     user_state: str = "safe"
     system_info: SystemInfoSchema = SystemInfoSchema()
     processes: list[ProcessInfoSchema] = []
