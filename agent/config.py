@@ -11,6 +11,7 @@ import uuid
 import psutil
 import yaml
 from typing import List, Optional
+from functools import lru_cache
 from pydantic import BaseModel, Field
 
 
@@ -307,21 +308,28 @@ class ConfigManager:
         return self.load()
 
     @staticmethod
+    @lru_cache(maxsize=1)
+    def get_mac_address() -> str:
+        """ID와 보고서에서 공유할 MAC을 프로세스당 한 번 조회한다."""
+        interfaces = psutil.net_if_addrs()
+        mac_str = next(
+            (addr.address for name in ("이더넷", "Ethernet")
+             for addr in interfaces.get(name, [])
+             if addr.family == psutil.AF_LINK and addr.address),
+            "",
+        )
+        if not mac_str:
+            mac = uuid.getnode()
+            mac_str = ":".join(
+                f"{(mac >> (8 * i)) & 0xFF:02X}" for i in reversed(range(6))
+            )
+        return mac_str.replace("-", ":").upper()
+
+    @staticmethod
     def _generate_agent_id() -> str:
         """MAC 주소 기반 에이전트 ID를 생성합니다."""
         try:
-            interfaces = psutil.net_if_addrs()
-            mac_str = next(
-                (addr.address for name in ("이더넷", "Ethernet")
-                 for addr in interfaces.get(name, [])
-                 if addr.family == psutil.AF_LINK and addr.address),
-                "",
-            )
-            if not mac_str:
-                mac = uuid.getnode()
-                mac_str = ":".join(
-                    f"{(mac >> (8 * i)) & 0xFF:02X}" for i in reversed(range(6))
-                )
+            mac_str = ConfigManager.get_mac_address()
             hostname = os.environ.get("COMPUTERNAME", "UNKNOWN")
             mac_short = mac_str.replace(":", "").replace("-", "")[-6:].upper()
             return f"{hostname}-{mac_short}"

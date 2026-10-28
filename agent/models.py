@@ -123,6 +123,7 @@ class StatusReport(BaseModel):
     agent_id: str
     hostname: str = ""
     ip_address: str = ""
+    mac_address: str = ""
     timestamp: datetime = Field(default_factory=datetime.now)
     agent_version: str = ""
     user_state: UserState = UserState.SAFE

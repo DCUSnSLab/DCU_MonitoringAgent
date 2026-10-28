@@ -15,14 +15,13 @@ import json
 import logging
 import queue
 import socket
-import uuid
 import platform
 from datetime import datetime
 from typing import List, Optional, Set
 
 import psutil
 
-from agent.config import AppConfig
+from agent.config import AppConfig, ConfigManager
 from agent.models import (
     ActiveDetection,
     AgentRegistration,
@@ -59,10 +58,11 @@ class DataCollector:
         self._config = config
         self._agent_id = config.agent.id
 
-        # 호스트명/IP는 자주 바뀌지 않으므로 1회만 조회해 캐시한다.
+        # 호스트명/MAC은 1회 조회. IP는 서버 재연결 시 필요하면 갱신한다.
         # (collect()는 1초마다 호출되므로 매 사이클 소켓 연결을 피한다)
         self._hostname = socket.gethostname()
         self._ip_address = self._get_local_ip()
+        self._mac_address = self._get_mac_address()
 
         # 모니터 초기화
         self._process_monitor = ProcessMonitor(config.monitoring.process, config.monitoring.messenger)
@@ -133,6 +133,7 @@ class DataCollector:
             agent_id=self._agent_id,
             hostname=self._hostname,
             ip_address=self._ip_address,
+            mac_address=self._mac_address,
             timestamp=timestamp,
             agent_version=self._config.agent.version,
             system_info=system_info,
@@ -162,7 +163,7 @@ class DataCollector:
             agent_id=self._agent_id,
             hostname=self._hostname,
             ip_address=self._ip_address,
-            mac_address=self._get_mac_address(),
+            mac_address=self._mac_address,
             os_version=platform.platform(),
             agent_version=self._config.agent.version,
         )
@@ -336,6 +337,11 @@ class DataCollector:
         for alert in report.alerts:
             logger.warning(f"  [{alert.level.upper()}] {alert.message}")
 
+    def refresh_ip_address(self) -> None:
+        """서버 재연결 시 교내 IP가 아니면 다시 조회한다."""
+        if not self._ip_address.startswith("203.250."):
+            self._ip_address = self._get_local_ip()
+
     @staticmethod
     def _get_local_ip() -> str:
         """로컬 IP 주소를 반환합니다."""
@@ -350,9 +356,6 @@ class DataCollector:
     def _get_mac_address() -> str:
         """MAC 주소를 반환합니다."""
         try:
-            mac = uuid.getnode()
-            return ":".join(
-                f"{(mac >> (8 * i)) & 0xFF:02X}" for i in reversed(range(6))
-            )
+            return ConfigManager.get_mac_address()
         except Exception:
             return "00:00:00:00:00:00"

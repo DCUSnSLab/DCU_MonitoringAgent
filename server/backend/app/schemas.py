@@ -81,6 +81,7 @@ class StatusReportRequest(BaseModel):
     agent_id: str
     hostname: str = ""
     ip_address: str = ""
+    mac_address: str = ""
     timestamp: Optional[datetime] = None
     agent_version: str = ""
     user_state: str = "safe"
