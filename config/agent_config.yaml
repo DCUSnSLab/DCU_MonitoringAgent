@@ -5,6 +5,7 @@ agent:
   id: ""                        # auto-generate
   lab_name: "lab1"
   version: "1.0.30"
+  channel: "stable"             # OTA 배포 채널: stable(실습실 전체) / develop(개발용 PC) — build_agent.bat 가 설정
 
 monitoring:
   interval_seconds: 1

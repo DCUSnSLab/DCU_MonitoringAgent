@@ -1,0 +1,19 @@
+# 서버 테스트 전용 이미지 — Jenkins 'Test' 단계가 빌드만 하고 버린다 (빌드가 성공하면 테스트 통과).
+# 테스트를 이미지 빌드 안에서 돌리므로 작업 폴더를 볼륨으로 마운트하지 않아도 되고,
+# Jenkins 에이전트 구성(컨테이너 안·밖)과 관계없이 같은 버전(python:3.11.16-slim)으로 실행된다.
+FROM python:3.11.16-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /src
+
+# 운영 이미지와 같은 고정 버전(constraints.txt) + 테스트 도구
+COPY requirements.txt requirements-dev.txt constraints.txt ./
+RUN pip install --no-cache-dir --root-user-action=ignore -r requirements-dev.txt
+
+COPY pytest.ini ./
+COPY app/ ./app/
+COPY tests/ ./tests/
+
+RUN python -m pytest -q -p no:cacheprovider tests

@@ -135,6 +135,7 @@ class DataCollector:
             ip_address=self._ip_address,
             timestamp=timestamp,
             agent_version=self._config.agent.version,
+            channel=self._config.agent.channel,
             system_info=system_info,
             processes=processes,
             browser_details=BrowserDetails(chrome=chrome_info),
@@ -348,11 +349,9 @@ class DataCollector:
 
     @staticmethod
     def _get_mac_address() -> str:
-        """MAC 주소를 반환합니다."""
+        """물리 랜카드의 MAC 주소를 반환합니다 (에이전트 ID 와 같은 기준)."""
         try:
-            mac = uuid.getnode()
-            return ":".join(
-                f"{(mac >> (8 * i)) & 0xFF:02X}" for i in reversed(range(6))
-            )
+            from agent.utils.machine_id import get_mac_address
+            return get_mac_address()
         except Exception:
             return "00:00:00:00:00:00"
