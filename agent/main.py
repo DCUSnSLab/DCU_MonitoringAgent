@@ -117,7 +117,9 @@ class MonitoringAgent:
         self._log.info(f"  OS          : {reg.os_version}")
         # API 클라이언트 시작 (서버 활성화 시)
         if self._config.server.enabled:
-            self._api_client = ApiClient(self._config.server, self._config.agent.id)
+            self._api_client = ApiClient(
+                self._config.server, self._config.agent.id, self._data_collector.refresh_ip_address
+            )
 
             # OTA Updater 초기화 및 콜백 연결
             if HAS_OTA:

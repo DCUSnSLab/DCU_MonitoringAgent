@@ -16,9 +16,9 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent.collectors.data_collector import DataCollector
-from agent.config import ServerConfig
+from agent.config import AppConfig, ConfigManager, ServerConfig
 from agent.models import (
-    ActiveDetection, Alert, BrowserDetails, ChromeInfo, ChromeTabInfo, ProcessInfo, StatusReport, UserState,
+    ActiveDetection, Alert, BrowserDetails, ChromeInfo, ChromeTabInfo, ProcessInfo, StatusReport, SystemInfo, UserState,
 )
 from agent.network.api_client import ApiClient
 
@@ -29,6 +29,7 @@ def _report():
     return StatusReport(
         agent_id="A",
         hostname="D2-535-21",
+        mac_address="00:11:22:AA:BB:CC",
         user_state=UserState.WARNING,
         processes=[ProcessInfo(
             pid=10, name="claude.exe", exe_path="C:\\x\\claude.exe", memory_mb=120.5,
@@ -81,6 +82,7 @@ class TestSendReport:
         assert payload["active_detections"][0]["target"] == "claude.exe"
         assert payload["browser_details"]["chrome"]["tabs"][0]["url"] == "https://chatgpt.com/"
         assert payload["foreground_window"] == "Claude"
+        assert payload["mac_address"] == "00:11:22:AA:BB:CC"
 
     def test_payload_much_smaller_than_full_report(self, tmp_path):
         report = _report()
@@ -109,8 +111,69 @@ class TestSendReport:
         with open(os.path.join(tmp_path, name), encoding="utf-8") as f:
             saved = json.load(f)
         assert "active_detections" not in saved  # 재전송 시 현재 탐지 목록을 덮어쓰지 않도록 (기존 동작)
+        assert saved["mac_address"] == "00:11:22:AA:BB:CC"
         assert DROPPED_PROCESS_FIELDS.isdisjoint(saved["processes"][0])
         assert "favicon_url" not in saved["browser_details"]["chrome"]["tabs"][0]
+
+
+def test_physical_mac_shared_with_id_and_cached_across_reports(monkeypatch):
+    from agent.utils import machine_id
+    addresses = MagicMock(return_value="001122AABBCC")
+    monkeypatch.setattr(machine_id, "get_physical_mac", addresses)
+    monkeypatch.setenv("COMPUTERNAME", "TEST-PC")
+    for name in ("ProcessMonitor", "WindowMonitor", "ChromeMonitor", "AddressBarMonitor", "WindowTitleDetector"):
+        monkeypatch.setattr("agent.collectors.data_collector." + name, MagicMock())
+    monkeypatch.setattr(DataCollector, "_get_local_ip", staticmethod(lambda: "127.0.0.1"))
+    config = AppConfig()
+    config.agent.id = ConfigManager._derive_agent_id()
+    collector = DataCollector(config)
+    collector._process_monitor.get_system_info.return_value = SystemInfo()
+    collector._process_monitor.collect.return_value = ([], [])
+    collector._window_monitor.get_window_titles_by_pid.return_value = {}
+    collector._window_monitor.get_foreground_pid.return_value = None
+    collector._window_monitor.get_foreground_window.return_value = None
+    collector._window_monitor.get_visible_windows.return_value = []
+    collector._chrome_monitor.collect.return_value = (ChromeInfo(), [])
+    collector._browser_window_alerts = MagicMock(return_value=[])
+    first, second = collector.collect(), collector.collect()
+    assert first.agent_id == second.agent_id == "TEST-PC-AABBCC"
+    assert first.mac_address == second.mac_address == "00:11:22:AA:BB:CC"
+    collector._get_local_ip = MagicMock(return_value="203.250.35.10")
+    collector.refresh_ip_address()
+    assert collector.collect().ip_address == "203.250.35.10"
+    assert first.ip_address == "127.0.0.1"  # 과거 보고서는 변경하지 않는다.
+    assert addresses.call_count == 2  # ID 생성과 수집기 초기화 때만 조회
+
+
+def test_reconnect_refreshes_ip_before_replaying_buffer(tmp_path, monkeypatch):
+    collector = DataCollector.__new__(DataCollector)
+    collector._ip_address = "169.254.1.2"
+    collector._get_local_ip = MagicMock(return_value="203.250.35.10")
+    client = _client(tmp_path)
+    client._on_connected = collector.refresh_ip_address
+    old_report = _report().copy(update={"ip_address": "169.254.1.2"})
+    assert client.buffer_report_offline(old_report)
+    sent = []
+    def send(endpoint, body):
+        assert collector._ip_address == "203.250.35.10"
+        sent.append(body)
+        return True
+    client._post = send
+    client.check_connection = lambda: True
+    client._running = True
+    monkeypatch.setattr("agent.network.api_client.time.sleep", lambda _: setattr(client, "_running", False))
+    client._sender_loop()
+    assert sent[0]["ip_address"] == "169.254.1.2"
+    assert not list(tmp_path.glob("*.json"))
+    collector._get_local_ip.assert_called_once()
+
+
+def test_campus_ip_is_not_queried_again():
+    collector = DataCollector.__new__(DataCollector)
+    collector._ip_address = "203.250.35.10"
+    collector._get_local_ip = MagicMock()
+    collector.refresh_ip_address()
+    collector._get_local_ip.assert_not_called()
 
 
 class TestCycleLog:

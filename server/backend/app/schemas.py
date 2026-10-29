@@ -81,6 +81,7 @@ class StatusReportRequest(BaseModel):
     agent_id: str
     hostname: str = ""
     ip_address: str = ""
+    mac_address: str = ""
     timestamp: Optional[datetime] = None
     agent_version: str = ""
     channel: str = "stable"  # OTA 배포 채널 (구버전 에이전트는 보내지 않음 → stable)

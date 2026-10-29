@@ -123,6 +123,7 @@ class StatusReport(BaseModel):
     agent_id: str
     hostname: str = ""
     ip_address: str = ""
+    mac_address: str = ""
     timestamp: datetime = Field(default_factory=datetime.now)
     agent_version: str = ""
     channel: str = "stable"  # OTA 배포 채널 (서버는 이 채널의 최신 버전만 안내)
