@@ -10,6 +10,13 @@ interface Props {
   onClose: () => void;
 }
 
+function formatLastSeen(iso: string | null): string {
+  if (!iso) return '알 수 없음';
+  const date = new Date(iso);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}.${pad(date.getMonth() + 1)}.${pad(date.getDate())}. ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 // 현재 탐지 항목을 알림 코드별로 묶어 보여줄 그룹
 const DETECTION_GROUPS: { label: string; codes: string[] }[] = [
   { label: '차단 프로그램', codes: ['BLOCKED_PROCESS', 'UNAUTHORIZED_PROCESS'] },
@@ -78,6 +85,7 @@ export default function AgentModal({ agent, onClose }: Props) {
               ['에이전트 버전', agent.agent_version ?? '—'],
               ['CPU', `${agent.cpu_percent.toFixed(1)}%`],
               ['메모리', `${agent.memory_percent.toFixed(1)}%`],
+              ['마지막 보고', formatLastSeen(agent.last_seen_at)],
             ].map(([label, value]) => (
               <div key={label}>
                 <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>{label}</div>
