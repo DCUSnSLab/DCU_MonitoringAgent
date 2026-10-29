@@ -1,25 +1,14 @@
-# SSO 최초 관리자 지정 (개발, DASHBOARD_AUTH_MODE=sso로 배포한 뒤 1회 실행)
-# SSO가 비밀번호를 관리하고, 대시보드 권한은 이 환경의 DB에서 별도로 관리한다.
-# 1. 관리자 계정으로 이 환경의 대시보드에서 SSO 로그인한다.
-#    최초에는 pending으로 등록되어 접근이 거부되는 것이 정상이다.
-# 2. 아래 목록에서 해당 계정의 sub(SSO UUID)를 확인한다.
-#    kubectl -n dcu-agent-monitor-dev exec deploy/backend -- python -m app.manage_dashboard list
-# 3. <SSO-UUID>를 확인한 sub로 바꿔 최초 admin을 부여한다.
-#    kubectl -n dcu-agent-monitor-dev exec deploy/backend -- python -m app.manage_dashboard grant '<SSO-UUID>' --role admin
-# 4. 다시 로그인한다. 이후 사용자 권한은 대시보드 관리자 페이지에서 관리한다.
-# 운영/개발은 SSO와 DB가 다르므로 각각의 계정 sub를 확인해 별도로 지정한다.
-# SSO 모드에서는 DASHBOARD_ADMIN_PASSWORD로 초기 관리자를 지정하지 않는다.
-# 이 주석은 수동 초기화 안내이며, YAML 적용만으로 관리자 권한이 부여되지는 않는다.
-#
+# SSO: 배포 전 이 네임스페이스에 dcu-dashboard-sso Secret을 준비한다.
+# 필수 키: SSO_CLIENT_SECRET, SSO_TOKEN_ENCRYPTION_KEY (환경별 고정 Fernet 키).
+# 최초 SSO 로그인은 pending. 아래 명령으로 sub를 확인하고 초기 admin을 지정한다.
+# kubectl -n dcu-agent-monitor-dev exec deploy/backend -- python -m app.manage_dashboard list
+# kubectl -n dcu-agent-monitor-dev exec deploy/backend -- python -m app.manage_dashboard grant '<SSO-UUID>' --role admin
+# 상세 배포 절차는 PR 본문과 server/SSO.md 참고.
 # ─── develop 환경 (dcu-agent-monitor-dev) ───────────────────────
 # develop 브랜치를 Jenkins 가 빌드해 올리는 검증용 서버. 운영(dcu-agent-monitor)과 완전히 분리된 네임스페이스·DB·OTA 저장소.
 #   백엔드  : http://203.250.35.27:30086   (운영 30085)
-#   대시보드: http://203.250.33.67:30031   (운영 30030)
+#   대시보드: http://203.250.35.27:30031   (운영 30030)
 # 이미지는 Harbor 의 :develop 태그. 루트 Jenkinsfile(멀티브랜치, develop 브랜치)이 이 파일을 저장소에서 바로 apply 하고, 소스가 바뀐 서비스만 재시작한다.
-# 대시보드 로그인은 이 네임스페이스에 Secret 이 있어야 한다 (없으면 백엔드는 뜨지만 로그인 불가):
-#   kubectl -n dcu-agent-monitor-dev create secret generic dcu-dashboard-auth \
-#     --from-literal=DASHBOARD_ADMIN_PASSWORD='<비밀번호>' \
-#     --from-literal=DASHBOARD_TOKEN_SECRET="$(openssl rand -hex 32)"
 ---
 apiVersion: v1
 kind: Namespace
@@ -34,8 +23,16 @@ metadata:
 data:
   DATABASE_URL: "postgresql+asyncpg://dcu:dcu1234@postgres-svc:5432/dcu_monitoring"
   API_KEY: "dcu-secret-key-change-in-production"
-  CORS_ORIGINS: '["http://localhost:3000","http://203.250.33.67:30031","*"]'
+  CORS_ORIGINS: '["http://203.250.35.27:30031"]'
   OTA_FILES_DIR: "/app/ota_files"
+  DASHBOARD_AUTH_MODE: "sso"
+  DASHBOARD_FRONTEND_URL: "http://203.250.35.27:30031"
+  DASHBOARD_COOKIE_SECURE: "false"
+  SSO_ISSUER: "http://203.250.35.87:30481/sso"
+  # 비어 있으면 위 공개 issuer로 token/JWKS를 호출한다. 확인된 내부 Service 주소가 있으면 지정 가능.
+  SSO_INTERNAL_BASE: ""
+  SSO_CLIENT_ID: "agent-monitoring"
+  SSO_REDIRECT_URI: "http://203.250.35.27:30086/api/auth/callback"
   TZ: "Asia/Seoul"
   NEXT_PUBLIC_API_URL: "http://203.250.35.27:30086"
   NEXT_PUBLIC_WS_URL: "ws://203.250.35.27:30086"
@@ -147,6 +144,19 @@ spec:
             - secretRef:
                 name: dcu-dashboard-auth
                 optional: true
+          env:
+            - name: SSO_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dcu-dashboard-sso
+                  key: SSO_CLIENT_SECRET
+                  optional: true
+            - name: SSO_TOKEN_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: dcu-dashboard-sso
+                  key: SSO_TOKEN_ENCRYPTION_KEY
+                  optional: true
           readinessProbe:
             httpGet:
               path: /api/health
