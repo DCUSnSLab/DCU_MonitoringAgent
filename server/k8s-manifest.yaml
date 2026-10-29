@@ -1,3 +1,10 @@
+# SSO: 배포 전 이 네임스페이스에 dcu-dashboard-sso Secret을 준비한다.
+# 필수 키: SSO_CLIENT_SECRET, SSO_TOKEN_ENCRYPTION_KEY (환경별 고정 Fernet 키).
+# 최초 SSO 로그인은 pending. 아래 명령으로 sub를 확인하고 초기 admin을 지정한다.
+# kubectl -n dcu-agent-monitor exec deploy/backend -- python -m app.manage_dashboard list
+# kubectl -n dcu-agent-monitor exec deploy/backend -- python -m app.manage_dashboard grant '<SSO-UUID>' --role admin
+# 상세 배포 절차는 PR 본문과 server/SSO.md 참고.
+# 운영 Jenkins 적용 파일: /services/dcuclassagent/k8s-manifest.yaml에도 반영 필요.
 ---
 apiVersion: v1
 kind: Namespace
@@ -14,8 +21,16 @@ data:
   DATABASE_URL: "postgresql+asyncpg://dcu:dcu1234@postgres-svc:5432/dcu_monitoring"
   API_KEY: "dcu-secret-key-change-in-production"
   # CORS 허용 출처: 프런트엔드가 실행되는 주소 (클라이언트 브라우저 도메인)
-  CORS_ORIGINS: '["http://localhost:3000","http://127.0.0.1:30030","*"]'
+  CORS_ORIGINS: '["http://203.250.35.27:30030"]'
   OTA_FILES_DIR: "/app/ota_files"
+  DASHBOARD_AUTH_MODE: "sso"
+  DASHBOARD_FRONTEND_URL: "http://203.250.35.27:30030"
+  DASHBOARD_COOKIE_SECURE: "false"
+  SSO_ISSUER: "https://code.cu.ac.kr/sso"
+  # 비어 있으면 위 공개 issuer로 token/JWKS를 호출한다. 확인된 내부 Service 주소가 있으면 지정 가능.
+  SSO_INTERNAL_BASE: ""
+  SSO_CLIENT_ID: "agent-monitoring"
+  SSO_REDIRECT_URI: "http://203.250.35.27:30085/api/auth/callback"
   
   # [중요] Next.js 클라이언트(브라우저)에서 백엔드에 접근하기 위한 절대 주소입니다.
   # NodePort 방식을 사용하신다면, 사용자가 접속하는 "K8s 워커노드의 IP"와 "백엔드의 NodePort"를 적어야 합니다.
@@ -161,17 +176,23 @@ spec:
           envFrom:
             - configMapRef:
                 name: dcu-config
-            # 대시보드 관리자 로그인 비밀번호·토큰 서명값 (공개 저장소라 값은 여기 두지 않고 클러스터에서 직접 만든다)
-            #   kubectl -n dcu-agent-monitor create secret generic dcu-dashboard-auth \
-            #     --from-literal=DASHBOARD_ADMIN_PASSWORD='<비밀번호>' \
-            #     --from-literal=DASHBOARD_TOKEN_SECRET="$(openssl rand -hex 32)"
-            #   확인(값은 안 보이고 키 이름만): kubectl -n dcu-agent-monitor describe secret dcu-dashboard-auth
-            # Secret 이 없으면 백엔드는 정상 기동하지만 대시보드에 로그인할 수 없다.
-            # 주의: Jenkins 는 이 파일이 아니라 Jenkins 서버의 /services/dcuclassagent/k8s-manifest.yaml 을 apply 한다.
-            #       아래 secretRef 를 그 파일에도 똑같이 넣어야 배포 후에도 유지된다.
+            # 기존 local 모드로 복구할 때 사용하는 비밀번호 Secret (SSO에서는 미사용).
             - secretRef:
                 name: dcu-dashboard-auth
                 optional: true
+          env:
+            - name: SSO_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dcu-dashboard-sso
+                  key: SSO_CLIENT_SECRET
+                  optional: true
+            - name: SSO_TOKEN_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: dcu-dashboard-sso
+                  key: SSO_TOKEN_ENCRYPTION_KEY
+                  optional: true
           volumeMounts:
             - name: ota-files
               mountPath: /app/ota_files

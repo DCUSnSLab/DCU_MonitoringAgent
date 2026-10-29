@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AgentDetail, AgentSummary, AlertInfo, AlertLog, DashboardSummary, WSMessage, WS_CLOSE_UNAUTHORIZED, WS_URL, api, wsProtocols,
 } from '@/lib/api';
-import { clearSession, getToken } from '@/lib/auth';
+import { clearSession, getSession, getToken } from '@/lib/auth';
 import { isBoolean, isOneOf, isString, usePersistentState } from '@/lib/persist';
 import AgentCard from '@/components/AgentCard';
 import AgentModal from '@/components/AgentModal';
@@ -166,11 +166,11 @@ export default function DashboardPage() {
 
     function connect() {
       const token = getToken();
-      if (!token) {
+      if (!getSession()) {
         clearSession(); // 로그인이 만료됨 → 로그인 화면으로
         return;
       }
-      const ws = new WebSocket(WS_URL, wsProtocols(token));
+      const ws = token ? new WebSocket(WS_URL, wsProtocols(token)) : new WebSocket(WS_URL);
       wsRef.current = ws;
       setWsStatus('connecting');
 
@@ -192,7 +192,7 @@ export default function DashboardPage() {
       ws.onclose = (e) => {
         setWsStatus('disconnected');
         // 서버가 로그인이 필요하다며 닫음 → 재연결하지 않고 로그인 화면으로
-        if (e.code === WS_CLOSE_UNAUTHORIZED) {
+        if (e.code === WS_CLOSE_UNAUTHORIZED || e.code === 4403) {
           clearSession();
           return;
         }

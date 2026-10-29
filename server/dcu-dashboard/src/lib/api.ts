@@ -167,6 +167,7 @@ async function apiFetch<T>(path: string): Promise<T> {
   const token = getToken();
   const res = await fetch(`${BASE}${path}`, {
     cache: 'no-store',
+    credentials: 'include',
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   });
   // 로그인이 만료·거부됨 → 로그인 정보를 지우면 로그인 화면으로 이동

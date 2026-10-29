@@ -12,10 +12,14 @@ WS /ws/dashboard  – 관리자 브라우저 실시간 연결
 import asyncio
 import logging
 import time
+from contextlib import suppress
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.services import auth_service
+from app.services import sso_service
+from app.config import settings
+from app.database import AsyncSessionLocal
 from app.services.ws_manager import ws_manager
 
 logger = logging.getLogger(__name__)
@@ -29,6 +33,9 @@ WS_CLOSE_UNAUTHORIZED = 4401
 @router.websocket("/ws/dashboard")
 async def dashboard_ws(websocket: WebSocket):
     """관리자 대시보드 실시간 업데이트 WebSocket"""
+    if settings.dashboard_auth_mode == "sso":
+        await _sso_dashboard_ws(websocket)
+        return
     subprotocols = websocket.scope.get("subprotocols") or []
     # 브라우저는 요청한 하위 프로토콜 중 하나를 서버가 돌려줘야 연결을 받아들인다
     subprotocol = auth_service.WS_SUBPROTOCOL if auth_service.WS_SUBPROTOCOL in subprotocols else None
@@ -61,3 +68,39 @@ async def _receive_until_closed(websocket: WebSocket):
     """클라이언트가 끊을 때까지 수신 대기 (ping/pong 유지)"""
     while True:
         await websocket.receive_text()
+
+
+async def _sso_dashboard_ws(websocket: WebSocket):
+    # 다른 origin에서 보낸 브라우저 쿠키로 접속하지 못하게 한다.
+    if websocket.headers.get("origin") != settings.dashboard_frontend_url.rstrip("/"):
+        await websocket.accept()
+        await websocket.close(code=4403)
+        return
+    cookie = websocket.cookies.get(sso_service.COOKIE, "")
+
+    async def allowed():
+        async with AsyncSessionLocal() as db:
+            return await sso_service.session_user(db, cookie) is not None
+
+    if not await allowed():
+        await websocket.accept()
+        await websocket.close(code=WS_CLOSE_UNAUTHORIZED)
+        return
+    await ws_manager.connect(websocket)
+    receiver = asyncio.create_task(_receive_until_closed(websocket))
+    try:
+        while True:
+            done, _ = await asyncio.wait({receiver}, timeout=30)
+            if done:
+                receiver.result()
+                break
+            if not await allowed():
+                await websocket.close(code=WS_CLOSE_UNAUTHORIZED)
+                break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        receiver.cancel()
+        with suppress(asyncio.CancelledError, WebSocketDisconnect):
+            await receiver
+        await ws_manager.disconnect(websocket)
