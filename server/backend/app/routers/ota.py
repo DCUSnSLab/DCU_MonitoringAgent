@@ -9,6 +9,7 @@ import hashlib
 import logging
 import os
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -26,6 +27,27 @@ router = APIRouter(tags=["OTA"])
 # OTA 파일 저장 디렉토리
 OTA_DIR = os.environ.get("OTA_FILES_DIR", "/app/ota_files")
 os.makedirs(OTA_DIR, exist_ok=True)
+
+# 배포 채널: stable = 실습실 전체 PC, develop = 개발·검증용 PC (develop 빌드로 설치한 PC만 받는다)
+CHANNELS = ("stable", "develop")
+DEFAULT_CHANNEL = "stable"
+
+
+def normalize_channel(channel: Optional[str]) -> str:
+    """채널 이름 정리. 모르는 값(구버전 에이전트 등)은 stable 로 본다."""
+    channel = (channel or "").strip().lower()
+    return channel if channel in CHANNELS else DEFAULT_CHANNEL
+
+
+async def latest_release_in_channel(db: AsyncSession, channel: Optional[str]) -> Optional[OTARelease]:
+    """해당 채널의 최신 릴리즈 (없으면 None)"""
+    result = await db.execute(
+        select(OTARelease)
+        .where(OTARelease.channel == normalize_channel(channel))
+        .order_by(desc(OTARelease.uploaded_at), desc(OTARelease.id))
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 def verify_api_key(api_key: str = None):
@@ -48,16 +70,21 @@ async def _verify_api_key(x_api_key: str = Depends()):
 async def upload_release(
     version: str = Form(...),
     release_notes: str = Form(""),
+    channel: str = Form(DEFAULT_CHANNEL),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
     """
     새 에이전트 빌드(.exe)를 업로드합니다.
 
-    - version: 버전 문자열 (예: "1.1.0")
+    - version: 버전 문자열 (예: "1.1.0"). 채널과 관계없이 전체에서 유일해야 한다 (develop 은 "1.0.31-dev1" 처럼 구분)
     - release_notes: 릴리즈 노트 (선택)
+    - channel: 배포 채널 stable(기본) / develop — 그 채널의 에이전트만 이 버전을 받는다
     - file: 에이전트 exe 파일
     """
+    if channel.strip().lower() not in CHANNELS:
+        raise HTTPException(status_code=422, detail="channel 은 stable 또는 develop 이어야 합니다")
+    channel = normalize_channel(channel)
     # 중복 버전 체크
     existing = await db.execute(
         select(OTARelease).where(OTARelease.version == version)
@@ -83,6 +110,7 @@ async def upload_release(
     # DB 저장
     release = OTARelease(
         version=version,
+        channel=channel,
         filename=filename,
         checksum=checksum,
         file_size=file_size,
@@ -90,14 +118,15 @@ async def upload_release(
     )
     db.add(release)
 
-    logger.info(f"OTA 릴리즈 업로드 완료: v{version} ({file_size} bytes, sha256={checksum[:16]}...)")
+    logger.info(f"OTA 릴리즈 업로드 완료: v{version} [{channel}] ({file_size} bytes, sha256={checksum[:16]}...)")
 
-    # 오래된 릴리즈 정리 (최근 30개만 보관)
-    await _cleanup_old_releases(db)
+    # 오래된 릴리즈 정리 (채널마다 최근 30개만 보관)
+    await _cleanup_old_releases(db, channel)
 
     return {
         "status": "ok",
         "version": version,
+        "channel": channel,
         "checksum": checksum,
         "file_size": file_size,
     }
@@ -106,10 +135,10 @@ async def upload_release(
 MAX_RELEASES = 30
 
 
-async def _cleanup_old_releases(db: AsyncSession):
-    """최근 MAX_RELEASES개를 제외한 오래된 릴리즈를 DB + 파일 모두 삭제합니다."""
+async def _cleanup_old_releases(db: AsyncSession, channel: str):
+    """해당 채널에서 최근 MAX_RELEASES개를 제외한 오래된 릴리즈를 DB + 파일 모두 삭제합니다."""
     result = await db.execute(
-        select(OTARelease).order_by(desc(OTARelease.uploaded_at))
+        select(OTARelease).where(OTARelease.channel == channel).order_by(desc(OTARelease.uploaded_at), desc(OTARelease.id))
     )
     all_releases = result.scalars().all()
 
@@ -132,26 +161,25 @@ async def _cleanup_old_releases(db: AsyncSession):
         deleted += 1
 
     if deleted:
-        logger.info(f"OTA 정리: {deleted}개 이전 릴리즈 삭제 (보관: {MAX_RELEASES}개)")
+        logger.info(f"OTA 정리 [{channel}]: {deleted}개 이전 릴리즈 삭제 (보관: {MAX_RELEASES}개)")
 
 
 # ─── 최신 버전 정보 조회 ─────────────────────────────────────────
 
 @router.get("/api/ota/latest")
 async def get_latest_release(
+    channel: str = DEFAULT_CHANNEL,
     db: AsyncSession = Depends(get_db),
 ):
-    """최신 OTA 릴리즈 정보를 반환합니다."""
-    result = await db.execute(
-        select(OTARelease).order_by(desc(OTARelease.uploaded_at)).limit(1)
-    )
-    release = result.scalar_one_or_none()
+    """채널(stable/develop)의 최신 OTA 릴리즈 정보를 반환합니다."""
+    release = await latest_release_in_channel(db, channel)
 
     if not release:
         raise HTTPException(status_code=404, detail="No releases available")
 
     return {
         "version": release.version,
+        "channel": release.channel,
         "checksum": release.checksum,
         "file_size": release.file_size,
         "release_notes": release.release_notes,

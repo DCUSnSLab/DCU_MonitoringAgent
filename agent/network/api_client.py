@@ -51,7 +51,7 @@ class ApiClient:
         client.stop()                           # 종료
     """
 
-    def __init__(self, config: ServerConfig, agent_id: str):
+    def __init__(self, config: ServerConfig, agent_id: str, on_connected=None):
         self._config = config
         self._agent_id = agent_id
         self._session = requests.Session()
@@ -64,6 +64,7 @@ class ApiClient:
         self._running = False
         self._send_thread: Optional[threading.Thread] = None
         self._registered = False
+        self._on_connected = on_connected
 
         # OTA 업데이트 콜백 (MonitoringAgent에서 설정)
         self._on_update_available = None
@@ -158,6 +159,8 @@ class ApiClient:
                 if not self._registered:
                     if self.check_connection():
                         logger.info("서버 연결 성공")
+                        if self._on_connected:
+                            self._on_connected()
                         self._registered = True
                         # 오프라인 버퍼 전송
                         self._flush_offline_buffer()

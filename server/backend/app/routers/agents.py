@@ -150,12 +150,9 @@ async def receive_report(req: StatusReportRequest, db: AsyncSession):
     latest_version = ""
     latest_checksum = ""
     if req.agent_version:
-        from sqlalchemy import desc as sql_desc
-        from app.models import OTARelease
-        ota_result = await db.execute(
-            select(OTARelease).order_by(sql_desc(OTARelease.uploaded_at)).limit(1)
-        )
-        latest_release = ota_result.scalar_one_or_none()
+        from app.routers.ota import latest_release_in_channel
+        # 에이전트가 속한 채널(stable/develop)의 최신 버전만 안내한다
+        latest_release = await latest_release_in_channel(db, req.channel)
         if latest_release and latest_release.version != req.agent_version:
             update_available = True
             latest_version = latest_release.version

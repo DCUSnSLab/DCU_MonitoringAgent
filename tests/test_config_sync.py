@@ -90,3 +90,20 @@ def test_not_frozen_no_sync(tmp_path):
     appdata.write_text(OLD_APPDATA, encoding="utf-8")
     cfg = ConfigManager(str(appdata)).config
     assert cfg.monitoring.chrome.blocked_urls == ["chatgpt.com"]
+
+
+def test_channel_synced_from_bundle(monkeypatch, tmp_path):
+    """OTA 배포 채널은 빌드에 구워진 값이 기준 (develop 빌드를 설치한 PC 는 develop 채널로 보고)"""
+    appdata = _frozen(monkeypatch, tmp_path, OLD_APPDATA)
+    bundled = tmp_path / "meipass" / "config" / "agent_config.yaml"
+    bundled.write_text(BUNDLED.replace('version: "1.0.30"', 'version: "1.0.31-dev1"\n  channel: "develop"'), encoding="utf-8")
+
+    cfg = ConfigManager(str(appdata)).config
+    assert cfg.agent.channel == "develop"
+    assert yaml.safe_load(appdata.read_text(encoding="utf-8"))["agent"]["channel"] == "develop"
+
+
+def test_channel_defaults_to_stable(tmp_path):
+    appdata = tmp_path / "agent_config.yaml"
+    appdata.write_text(OLD_APPDATA, encoding="utf-8")
+    assert ConfigManager(str(appdata)).config.agent.channel == "stable"

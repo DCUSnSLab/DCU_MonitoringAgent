@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 
 from app.config import settings
 from app.database import Base, AsyncSessionLocal, engine
@@ -161,12 +161,29 @@ async def _retention_cleanup():
         await asyncio.sleep(86400)  # 24시간
 
 
+# create_all 은 이미 있는 테이블에 열을 추가하지 않는다. 운영 DB(PostgreSQL)에 새 열을 넣을 때 여기에 적는다.
+# (SQLite 테스트 DB 는 매번 새로 만들어 create_all 로 열이 생기므로 건너뛴다)
+_COLUMN_ADDITIONS = (
+    # GEN-1692: OTA 배포 채널
+    "ALTER TABLE ota_releases ADD COLUMN IF NOT EXISTS channel VARCHAR(16) NOT NULL DEFAULT 'stable'",
+    "CREATE INDEX IF NOT EXISTS ix_ota_releases_channel ON ota_releases (channel)",
+)
+
+
+async def _apply_column_additions(conn):
+    if conn.dialect.name != "postgresql":
+        return
+    for statement in _COLUMN_ADDITIONS:
+        await conn.execute(text(statement))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """앱 시작 시 DB 테이블 자동 생성 + 오프라인 감지/보관 정리 태스크 시작"""
     logger.info("DCU Monitoring Server 시작 중...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _apply_column_additions(conn)
     logger.info("DB 테이블 초기화 완료")
 
     # 백그라운드 오프라인 감지 시작

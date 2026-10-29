@@ -100,6 +100,33 @@ async def test_first_report_creates_agent_without_previous_time(db):
     assert agent.agent_id == "A" and prev is None  # 아직 보고 처리 전이라 last_seen_at 없음
 
 
+async def test_report_stores_mac_and_updates_ip_without_erasing_mac(db):
+    # 구버전/과거 보고로 생성된 행도 새 보고서가 MAC을 채운다.
+    await agents.receive_report(report().model_copy(update={"ip_address": "127.0.0.1"}), db)
+    req = report().model_copy(update={"mac_address": "00:11:22:AA:BB:CC", "ip_address": "203.250.35.10"})
+    await agents.receive_report(req, db)
+    agent = await db.scalar(select(Agent).where(Agent.agent_id == "A"))
+    assert agent.mac_address == "00:11:22:AA:BB:CC"
+    assert agent.ip_address == "203.250.35.10"
+    await agents.receive_report(report().model_copy(update={"ip_address": "203.250.35.11"}), db)
+    await db.refresh(agent)
+    assert agent.mac_address == "00:11:22:AA:BB:CC"
+    assert agent.ip_address == "203.250.35.11"
+    assert await db.scalar(select(func.count()).select_from(Agent)) == 1
+
+
+async def test_mac_is_saved_on_first_report_and_reregistration(db):
+    from app.schemas import AgentRegisterRequest
+    agent, _ = await agent_service.load_agent_for_report(
+        db, report().model_copy(update={"mac_address": "00:11:22:AA:BB:CC"})
+    )
+    assert agent.mac_address == "00:11:22:AA:BB:CC"
+    await agent_service.upsert_agent(db, AgentRegisterRequest(
+        agent_id="A", hostname="D2-535-21", mac_address="00:11:22:DD:EE:FF"
+    ))
+    assert agent.mac_address == "00:11:22:DD:EE:FF"
+
+
 async def test_report_updates_agent_summary_fields(db):
     await agents.receive_report(report(), db)
     await agents.receive_report(

@@ -295,6 +295,8 @@ async def upsert_agent(db: AsyncSession, req: AgentRegisterRequest) -> Agent:
             agent.lab_name = parsed_lab_name
         if req.ip_address:
             agent.ip_address = req.ip_address
+        if req.mac_address:
+            agent.mac_address = req.mac_address
         if req.os_version:
             agent.os_version = req.os_version
         if req.agent_version:
@@ -332,6 +334,7 @@ async def load_agent_for_report(
         hostname=hostname,
         lab_name=parse_lab_name(hostname),
         ip_address=req.ip_address or None,
+        mac_address=req.mac_address or None,
         agent_version=req.agent_version or None,
     )
     db.add(agent)
@@ -353,6 +356,8 @@ def apply_report_to_agent(agent: Agent, req: StatusReportRequest, now: datetime)
         agent.lab_name = lab_name
     if req.ip_address:
         agent.ip_address = req.ip_address
+    if req.mac_address:
+        agent.mac_address = req.mac_address
     if req.agent_version:
         agent.agent_version = req.agent_version
 
