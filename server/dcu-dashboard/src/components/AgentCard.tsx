@@ -89,7 +89,7 @@ export default function AgentCard({ agent, onClick }: Props) {
       )}
 
       <div className="agent-last-seen">
-        {agent.is_online ? `마지막 보고: ${timeAgo(agent.last_seen_at)}` : '오프라인'}
+        {`마지막 보고: ${timeAgo(agent.last_seen_at)}`}
       </div>
     </div>
   );
