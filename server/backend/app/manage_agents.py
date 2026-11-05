@@ -33,16 +33,118 @@ def candidate_seat(hostname, agent_id):
     return host_seat or id_seat
 
 
+def timestamp(value):
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+async def group_conflict(db, members, target):
+    """자리 전체를 먼저 검사한다. 일부만 병합한 뒤 충돌을 발견하지 않도록 한다."""
+    source_ids = [a.id for a in members if not target or a.id != target.id]
+    if not source_ids:
+        return None
+    if await db.scalar(select(func.count()).select_from(AgentInstallation).where(
+            AgentInstallation.agent_pk.in_(source_ids), AgentInstallation.status == "active")):
+        return "활성 설치가 있는 구형 행: 설치 연결 검토 필요"
+    for model in (AgentHardware, AgentCPU, AgentGPU, AgentDisk, AgentNetworkAdapter):
+        if await db.scalar(select(func.count()).select_from(model).where(model.agent_pk.in_(source_ids))):
+            return "구형 행에 하드웨어 정보가 있음: 사양 선택 검토 필요"
+    ids = [a.agent_id for a in members]
+    for model, keys in ((AgentStatusMinute, ("minute",)),
+                        (BlockedSiteDailyStat, ("url_pattern", "stat_date"))):
+        columns = [getattr(model, k) for k in keys]
+        collision = select(*columns).where(model.agent_id.in_(ids)).group_by(*columns).having(func.count() > 1).limit(1)
+        if (await db.execute(collision)).first():
+            return f"{model.__tablename__}: 집계 구간 중복"
+    aliases = (await db.scalars(select(AgentIDAlias).where(AgentIDAlias.legacy_agent_id.in_(ids)))).all()
+    allowed = {a.id for a in members}
+    if any(alias.agent_pk not in allowed for alias in aliases):
+        return "기존 별칭이 다른 에이전트를 참조함"
+    return None
+
+
+async def merge_all(db):
+    """대표 행 자동 생성 및 비충돌 그룹 일괄 병합. 호출자가 commit/rollback한다."""
+    agents = (await db.scalars(select(Agent).order_by(Agent.id))).all()
+    by_id = {a.agent_id: a for a in agents}
+    groups, unassigned = {}, []
+    for agent in agents:
+        seat = candidate_seat(agent.hostname, agent.agent_id)
+        if seat:
+            groups.setdefault(seat, []).append(agent)
+        else:
+            unassigned.append({"id": agent.id, "agent_id": agent.agent_id, "hostname": agent.hostname})
+    result = {"agents_before": len(agents), "created_seats": 0, "merged_rows": 0,
+              "merged_groups": [], "skipped_groups": [], "unassigned": unassigned}
+    for seat, members in sorted(groups.items()):
+        target = by_id.get(seat)
+        canonical_alias = await db.get(AgentIDAlias, seat)
+        if target and target not in members:
+            reason = "대표 ID의 hostname이 다른 자리를 가리킴"
+        elif canonical_alias and canonical_alias.agent_pk not in {a.id for a in members}:
+            reason = "대표 ID의 기존 별칭이 다른 에이전트를 참조함"
+        else:
+            reason = await group_conflict(db, members, target)
+        if reason:
+            result["skipped_groups"].append({"seat": seat, "reason": reason,
+                                             "ids": [a.id for a in members]})
+            continue
+        if len(members) == 1 and target is members[0]:
+            continue  # 재실행해도 기존 정상 행/시각/설치 정보는 바뀌지 않는다.
+        newest = max(members, key=lambda a: (timestamp(a.last_seen_at or a.registered_at), a.id))
+        earliest = min(timestamp(a.registered_at) for a in members)
+        old_ids = [a.agent_id for a in members if a is not target]
+        if target is None:
+            values = {c.name: getattr(newest, c.name) for c in Agent.__table__.columns
+                      if c.name not in ("id", "agent_id", "registered_at", "seat_confirmed")}
+            target = Agent(agent_id=seat, registered_at=earliest, seat_confirmed=True, **values)
+            db.add(target)
+            await db.flush()
+            by_id[seat] = target
+            result["created_seats"] += 1
+        elif newest is not target:
+            # 이미 승인된 대표 설치가 있으면 그 설치의 현재 상태를 구형 캐시로 덮어쓰지 않는다.
+            active = await db.scalar(select(AgentInstallation.installation_id).where(
+                AgentInstallation.agent_pk == target.id, AgentInstallation.status == "active"))
+            if not active:
+                for c in Agent.__table__.columns:
+                    if c.name not in ("id", "agent_id", "registered_at", "seat_confirmed"):
+                        setattr(target, c.name, getattr(newest, c.name))
+        target.registered_at = earliest
+        target.seat_confirmed = True
+        target.lab_name = seat.split("-")[1]
+        await db.flush()
+        for source in members:
+            if source.id == target.id:
+                continue
+            for model in (AlertLogDB, StatusReportDB, AgentStatusMinute, BlockedSiteDailyStat):
+                await db.execute(update(model).where(model.agent_id == source.agent_id)
+                                 .values(agent_id=seat, agent_pk=target.id))
+            for model in (AgentInstallation, AgentIDAlias):
+                await db.execute(update(model).where(model.agent_pk == source.id).values(agent_pk=target.id))
+            if not await db.get(AgentIDAlias, source.agent_id):
+                db.add(AgentIDAlias(legacy_agent_id=source.agent_id, agent_pk=target.id))
+            await db.flush()
+            await db.execute(delete(Agent).where(Agent.id == source.id))
+            result["merged_rows"] += 1
+        result["merged_groups"].append({"seat": seat, "target_id": target.id, "legacy_ids": old_ids})
+    result["agents_after"] = await db.scalar(select(func.count()).select_from(Agent))
+    return result
+
+
 async def run(args):
     async with AsyncSessionLocal() as db:
         if db.get_bind().dialect.name == "postgresql":
             await db.execute(text("SELECT pg_advisory_xact_lock(1773)"))
             # 이관은 점검 시간에만 실행. 쓰기와 교차해 누락되는 것을 방지한다.
-            if args.command == "merge":
+            if args.command in ("merge", "merge-all"):
                 await db.execute(text("LOCK TABLE agents, agent_installations, agent_id_aliases, "
-                                      "alert_logs, status_reports, agent_status_minutes, blocked_site_daily_stats "
+                                      "alert_logs, status_reports, agent_status_minutes, blocked_site_daily_stats, "
+                                      "agent_hardware, agent_cpus, agent_gpus, agent_disks, agent_network_adapters "
                                       "IN SHARE ROW EXCLUSIVE MODE"))
-        if args.command == "candidates":
+        if args.command == "merge-all":
+            result = await merge_all(db)
+            result["mode"] = "apply" if args.apply else "dry-run"
+        elif args.command == "candidates":
             groups = {}
             for a in (await db.scalars(select(Agent))).all():
                 candidate = candidate_seat(a.hostname, a.agent_id)
@@ -113,11 +215,13 @@ async def run(args):
         else:
             await db.rollback()
             print("DRY RUN: no changes committed")
+        if args.command == "merge-all":
+            print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["candidates", "create-seat", "installations", "approve", "revoke", "merge"])
+    parser.add_argument("command", choices=["candidates", "create-seat", "installations", "approve", "revoke", "merge", "merge-all"])
     parser.add_argument("--agent-id")
     parser.add_argument("--installation-id")
     parser.add_argument("--source", type=int)
