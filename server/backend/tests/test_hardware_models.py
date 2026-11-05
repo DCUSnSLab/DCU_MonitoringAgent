@@ -1,7 +1,6 @@
 """GEN-1773 저장 제약. TEST_HARDWARE_DATABASE_URL 지정 시 격리된 PostgreSQL 스키마에서도 실행."""
 import os
 from datetime import datetime, timezone
-from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -148,10 +147,12 @@ async def test_alias_unique_and_new_records_cascade(hardware_db):
         assert await db.scalar(select(func.count()).select_from(model)) == 0
 
 
-async def test_postgresql_migration_preserves_legacy_data_and_can_be_reapplied(hardware_engine):
+async def test_postgresql_startup_preserves_legacy_data_and_can_be_reapplied(hardware_engine):
     if hardware_engine.dialect.name != "postgresql":
-        pytest.skip("PostgreSQL SQL migration")
-    # 기존 DB를 재현한 뒤 실제 운영용 SQL을 두 번 실행한다. 격리된 테스트 스키마만 사용.
+        pytest.skip("PostgreSQL startup initialization")
+    from app.main import _apply_column_additions
+    from app.reference_migration import apply
+    # 가상 기존 DB에서 서버 시작 초기화를 두 번 검증한다. 백업/실제 병합 데이터는 사용하지 않는다.
     async with hardware_engine.begin() as conn:
         await conn.execute(text("INSERT INTO agents (agent_id, hostname, current_state, is_online, "
                                 "process_count, chrome_tab_count, alert_count, cpu_percent, memory_percent) "
@@ -159,11 +160,11 @@ async def test_postgresql_migration_preserves_legacy_data_and_can_be_reapplied(h
         for model in reversed(NEW_MODELS):
             await conn.run_sync(lambda c, t=model.__table__: t.drop(c))
         await conn.execute(text("ALTER TABLE agents DROP COLUMN seat_confirmed"))
-    sql = (Path(__file__).resolve().parents[1] / "migrations/2026-11-05_agent_hardware.sql").read_text(encoding="utf-8-sig")
-    async with hardware_engine.connect() as conn:
-        raw = await conn.get_raw_connection()
-        await raw.driver_connection.execute(sql)
-        await raw.driver_connection.execute(sql)
+    async with hardware_engine.begin() as conn:
+        for _ in range(2):
+            await conn.run_sync(Base.metadata.create_all)
+            await _apply_column_additions(conn)
+            await apply(conn)
         row = (await conn.execute(text("SELECT agent_id, hostname, seat_confirmed FROM agents"))).one()
         assert tuple(row) == ("legacy", "DESKTOP-OLD", False)
         for model in NEW_MODELS:
