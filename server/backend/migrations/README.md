@@ -33,7 +33,7 @@ psql -v ON_ERROR_STOP=1 -U dcu -d dcu_monitoring -f 2026-11-05_agent_hardware.sq
 모든 신규 FK는 `agents.id`를 참조하며 부모 삭제 시 CASCADE한다. 장치별 테이블에는
 `(agent_pk, device_key)` UNIQUE를 적용한다. 동일 모델 장치 여러 개와 다른 자리의 동일
 장치 키는 허용한다. 모르는 사양은 NULL, 알려진 용량은 음수가 아닌 BIGINT 바이트로 저장한다.
-사용량 집계 방식은 유지한다. 보고/로컬 설정/API 변경과 운영 절차는 `server/GEN-1773.md` 참조.
+사용량 집계 방식은 유지한다.
 
 ## 검증
 

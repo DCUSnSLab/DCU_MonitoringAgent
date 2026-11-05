@@ -79,6 +79,7 @@ export default function AgentModal({ agent, onClose }: Props) {
           {/* 기본 정보 */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
             {[
+              ['에이전트 ID', agent.agent_id],
               ['IP 주소', agent.ip_address ?? '—'],
               ['실습실', agent.lab_name ?? '—'],
               ['OS', agent.os_version ?? '—'],
@@ -89,7 +90,7 @@ export default function AgentModal({ agent, onClose }: Props) {
             ].map(([label, value]) => (
               <div key={label}>
                 <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>{label}</div>
-                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }} className="mono">{value}</div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', overflowWrap: 'anywhere' }} className="mono">{value}</div>
               </div>
             ))}
           </div>

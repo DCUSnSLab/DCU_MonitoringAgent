@@ -6,7 +6,7 @@ import re
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, ConfigDict, field_validator
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,14 +29,45 @@ class Registration(BaseModel):
     token: str = Field(min_length=43, max_length=256)
 
 
+def utc(value):
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+async def approve_offline_replacement(db, agent, installation):
+    """종료 후 새로 등록된 가장 최근 설치만 교체 승인한다. 자리 행 잠금 안에서 호출한다."""
+    if (installation.status != "pending" or agent.is_online or agent.last_seen_at is None
+            or utc(installation.registered_at) <= utc(agent.last_seen_at)):
+        return
+    active = await db.scalar(select(AgentInstallation.installation_id).where(
+        AgentInstallation.agent_pk == agent.id, AgentInstallation.status == "active"))
+    if not active:
+        return  # 최초 설치 승인은 기존 AUTO_APPROVE_INSTALLATIONS 정책을 따른다.
+    latest = await db.scalar(select(AgentInstallation.installation_id).where(
+        AgentInstallation.agent_pk == agent.id, AgentInstallation.status == "pending"
+    ).order_by(AgentInstallation.registered_at.desc(), AgentInstallation.installation_id.desc()).limit(1))
+    if latest != installation.installation_id:
+        return
+    now = datetime.now(timezone.utc)
+    # 부분 UNIQUE 인덱스를 위반하지 않도록 기존 승인을 먼저 해제한 뒤 새 설치 활성화.
+    await db.execute(update(AgentInstallation).where(
+        AgentInstallation.agent_pk == agent.id,
+        AgentInstallation.installation_id != installation.installation_id,
+        AgentInstallation.status.in_(("active", "pending")),
+    ).values(status="revoked", revoked_at=now))
+    await db.flush()
+    installation.status, installation.approved_at, installation.revoked_at = "active", now, None
+
+
 @router.post("/installations")
 async def register(req: Registration, db: AsyncSession = Depends(get_db)):
     installation_id = str(req.installation_id)
-    existing = await db.get(AgentInstallation, installation_id)
     agent = await db.scalar(select(Agent).where(Agent.agent_id == req.agent_id).with_for_update())
+    existing = await db.get(AgentInstallation, installation_id, populate_existing=True)
     if existing:
         if not agent or existing.agent_pk != agent.id or existing.token_hash != digest(req.token):
             raise HTTPException(409, "Installation identity mismatch")
+        await approve_offline_replacement(db, agent, existing)
+        await db.commit()
         return {"status": existing.status}
     if agent is None:
         agent = Agent(agent_id=req.agent_id, hostname=req.hostname,
@@ -50,15 +81,20 @@ async def register(req: Registration, db: AsyncSession = Depends(get_db)):
     active = await db.scalar(select(AgentInstallation).where(
         AgentInstallation.agent_pk == agent.id, AgentInstallation.status == "active"))
     status = "active" if settings.auto_approve_installations and not active else "pending"
-    db.add(AgentInstallation(installation_id=installation_id, agent_pk=agent.id,
-                            status=status, token_hash=digest(req.token),
-                            approved_at=datetime.now(timezone.utc) if status == "active" else None))
+    now = datetime.now(timezone.utc)
+    installation = AgentInstallation(installation_id=installation_id, agent_pk=agent.id,
+        status=status, token_hash=digest(req.token), registered_at=now,
+        approved_at=now if status == "active" else None)
+    db.add(installation)
     try:
+        await db.flush()
+        if active:
+            await approve_offline_replacement(db, agent, installation)
         await db.commit()
     except IntegrityError:
         await db.rollback()
         raise HTTPException(409, "Concurrent registration; retry")
-    return {"status": status}
+    return {"status": installation.status}
 
 
 class Device(BaseModel):

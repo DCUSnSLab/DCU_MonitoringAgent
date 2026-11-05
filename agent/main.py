@@ -281,8 +281,7 @@ def main():
     if args.setup:
         from agent.setup_identity import main as setup
         options = (["--config", args.config] if args.config else []) + (["--seat", args.seat] if args.seat else [])
-        setup(options)
-        return
+        return setup(options)
 
     agent = MonitoringAgent(config_path=args.config)
 
@@ -296,4 +295,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

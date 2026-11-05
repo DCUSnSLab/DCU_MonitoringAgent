@@ -13,16 +13,18 @@ def digest(token):
 
 
 async def authorize(db, agent_id, installation_id, token):
-    agent = await db.scalar(select(Agent).where(Agent.agent_id == agent_id))
+    # 보고와 설치 교체가 동시에 발생해도 마지막 수신 시각/승인을 일관되게 판단한다.
+    agent = await db.scalar(select(Agent).where(Agent.agent_id == agent_id).with_for_update()
+                            .execution_options(populate_existing=True))
     if agent is None:
         alias = await db.get(AgentIDAlias, agent_id)
-        agent = await db.get(Agent, alias.agent_pk) if alias else None
+        agent = await db.get(Agent, alias.agent_pk, with_for_update=True, populate_existing=True) if alias else None
     if installation_id:
         try:
             installation_id = str(UUID(installation_id))
         except ValueError:
             raise HTTPException(403, "Invalid installation ID")
-        installation = await db.get(AgentInstallation, installation_id)
+        installation = await db.get(AgentInstallation, installation_id, populate_existing=True)
         if (not agent or not installation or installation.agent_pk != agent.id
                 or installation.status != "active" or not installation.token_hash
                 or not hmac.compare_digest(installation.token_hash, digest(token))):

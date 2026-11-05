@@ -1,4 +1,5 @@
 @echo off
+setlocal
 cd /d "%~dp0"
 echo Installing DCU Monitoring Agent...
 set "TARGET_DIR=%LOCALAPPDATA%\DCU_MonitoringAgent"
@@ -6,6 +7,11 @@ if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
 
 echo 1. Copying files...
 copy /Y "DCU_MonitoringAgent.exe" "%TARGET_DIR%\DCU_MonitoringAgent.exe"
+if errorlevel 1 goto install_failed
+
+echo Confirm the building, classroom and seat before starting the agent...
+start "" /wait "%TARGET_DIR%\DCU_MonitoringAgent.exe" --setup
+if errorlevel 1 goto setup_cancelled
 
 echo 2. Registering Startup program...
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "DCU_MonitoringAgent" /t REG_SZ /d "\"%TARGET_DIR%\DCU_MonitoringAgent.exe\"" /f
@@ -54,3 +60,14 @@ start "" "%TARGET_DIR%\DCU_MonitoringAgent.exe"
 
 echo Installation Complete! Check your system tray.
 timeout /t 3 >nul
+exit /b 0
+
+:setup_cancelled
+echo Seat setup was cancelled or failed. The agent was not started.
+pause
+exit /b 1
+
+:install_failed
+echo Failed to copy the agent. Close any running agent and try again.
+pause
+exit /b 1
