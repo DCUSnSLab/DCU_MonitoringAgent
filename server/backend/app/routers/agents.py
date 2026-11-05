@@ -21,6 +21,7 @@ from app.config import settings
 from app.database import get_db
 from app.schemas import AgentRegisterRequest, StatusReportRequest, AgentOfflineRequest
 from app.services import agent_service
+from app.services.installation_service import authorize
 from app.services.report_aggregator import report_aggregator, report_stats
 from app.services.ws_manager import ws_manager
 
@@ -48,6 +49,7 @@ async def register_agent(
     _: None = Depends(verify_api_key),
 ):
     """에이전트 등록 또는 재등록"""
+    await authorize(db, req.agent_id, None, "")
     agent = await agent_service.upsert_agent(db, req)
     # 대시보드에 신규 에이전트 알림
     summary = await agent_service.get_agent_summary(db, req.agent_id)
@@ -76,6 +78,13 @@ async def report_endpoint(
         req = StatusReportRequest.model_validate_json(await request.body())
     except ValidationError as e:
         raise RequestValidationError(e.errors(include_url=False))
+    agent = await authorize(db, req.agent_id, req.installation_id,
+                            request.headers.get("X-Installation-Token", ""))
+    if agent:
+        updates = {"agent_id": agent.agent_id}
+        if req.installation_id:
+            updates.update(hostname="", mac_address="")
+        req = req.model_copy(update=updates)
     result = await receive_report(req, db)
     report_stats.record(req.agent_id, len(req.alerts), (time.perf_counter() - started) * 1000)
     return result
@@ -91,7 +100,8 @@ async def receive_report(req: StatusReportRequest, db: AsyncSession):
 
     # 에이전트 행과 직전 보고 시각을 한 번에 읽는다 (차단 사이트 시간 누적에 직전 시각이 필요)
     agent, prev_last_seen = await agent_service.load_agent_for_report(db, req)
-    agent_service.apply_report_to_agent(agent, req, now)
+    if not req.installation_id or req.active_detections is not None:
+        agent_service.apply_report_to_agent(agent, req, now)
 
     # DANGER 유지: 잠깐 띄웠다 내린 경우도 대시보드에서 놓치지 않게 일정 시간 DANGER와 이유를 유지
     agent_service.register_danger(req, now)
@@ -107,7 +117,8 @@ async def receive_report(req: StatusReportRequest, db: AsyncSession):
         agent_service.set_active_detections(req.agent_id, req.active_detections)
 
     # 차단 사이트 활성/백그라운드 시간 누적
-    await agent_service.accumulate_blocked_site_stats(db, req, prev_last_seen)
+    if not req.installation_id or req.active_detections is not None:
+        await agent_service.accumulate_blocked_site_stats(db, req, prev_last_seen)
 
     # 보고·알림 저장을 확정한 뒤 화면 표시 상태와 1분 집계에 반영한다.
     # (저장이 실패하면 반영하지 않아, 다음 보고에서 같은 화면 표시 알림을 다시 판단한다)
@@ -172,11 +183,16 @@ async def receive_offline(
     req: AgentOfflineRequest,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(verify_api_key),
+    request: Request = None,
 ):
     """에이전트 종료 시 즉시 오프라인 상태 처리"""
     from sqlalchemy import update
     from app.models import Agent
 
+    authorized = await authorize(db, req.agent_id, req.installation_id,
+                                 request.headers.get("X-Installation-Token", "") if request else "")
+    if authorized:
+        req = req.model_copy(update={"agent_id": authorized.agent_id})
     await db.execute(
         update(Agent)
         .where(Agent.agent_id == req.agent_id)

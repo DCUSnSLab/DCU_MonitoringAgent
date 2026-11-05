@@ -6,6 +6,9 @@ from typing import Literal
 
 
 class Settings(BaseSettings):
+    allow_legacy_agents: bool = True
+    # 무인 전환 기간에만 API key를 가진 최초 설치 자동 승인. 이후 false로 닫는다.
+    auto_approve_installations: bool = False
     database_url: str = "sqlite+aiosqlite:///./dcu_monitoring.db"
     api_key: str = "dcu-secret-key-change-in-production"
     cors_origins: list[str] = ["http://localhost:3000", "http://frontend:3000"]

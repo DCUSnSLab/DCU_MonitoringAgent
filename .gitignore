@@ -64,6 +64,10 @@ offline_buffer/
 
 # User-specific config overrides (optional)
 agent_config.local.yaml
+installation.json
+installation.json.tmp
+last_synced_hardware.json
+last_synced_hardware.json.tmp
 
 # ===== Server Side (Node.js & Next.js) =====
 node_modules/

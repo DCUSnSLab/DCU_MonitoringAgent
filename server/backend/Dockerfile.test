@@ -15,5 +15,6 @@ RUN pip install --no-cache-dir --root-user-action=ignore -r requirements-dev.txt
 COPY pytest.ini ./
 COPY app/ ./app/
 COPY tests/ ./tests/
+COPY migrations/ ./migrations/
 
 RUN python -m pytest -q -p no:cacheprovider tests
