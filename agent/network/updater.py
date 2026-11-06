@@ -251,6 +251,8 @@ class OTAUpdater:
         try:
             subprocess.Popen(
                 [exe_path],
+                # 새 onefile 프로세스가 종료될 부모의 임시 압축 해제 폴더를 재사용하지 않도록 한다.
+                env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"},
                 creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
             )
         except Exception as e:
