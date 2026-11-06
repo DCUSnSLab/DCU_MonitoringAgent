@@ -56,7 +56,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File %PS_SCRIPT%
 del %PS_SCRIPT%
 
 echo 5. Starting Agent...
-start "" "%TARGET_DIR%\DCU_MonitoringAgent.exe"
+start "" /d "%TARGET_DIR%" "%TARGET_DIR%\DCU_MonitoringAgent.exe"
 
 echo Installation Complete! Check your system tray.
 timeout /t 3 >nul
