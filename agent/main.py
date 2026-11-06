@@ -118,7 +118,7 @@ class MonitoringAgent:
         # API 클라이언트 시작 (서버 활성화 시)
         if self._config.server.enabled:
             self._api_client = ApiClient(
-                self._config.server, self._config.agent.id, self._data_collector.refresh_ip_address
+                self._config.server, self._config.agent.id, self._data_collector.refresh_ip_address, identity=self._config_mgr.identity
             )
 
             # OTA Updater 초기화 및 콜백 연결
@@ -269,12 +269,19 @@ def parse_args():
                         help="콘솔 모드로 실행 (트레이 UI 없음)")
     parser.add_argument("--debug", action="store_true",
                         help="디버그 레벨 로깅")
+    parser.add_argument("--setup", action="store_true", help="관리자용 초기 자리 설정")
+    parser.add_argument("--seat", help="초기 자리 코드 (예: D2-535-21)")
     return parser.parse_args()
 
 
 def main():
     """메인 함수"""
     args = parse_args()
+
+    if args.setup:
+        from agent.setup_identity import main as setup
+        options = (["--config", args.config] if args.config else []) + (["--seat", args.seat] if args.seat else [])
+        return setup(options)
 
     agent = MonitoringAgent(config_path=args.config)
 
@@ -288,4 +295,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -6,6 +6,9 @@ from typing import Literal
 
 
 class Settings(BaseSettings):
+    allow_legacy_agents: bool = True
+    # 관리자 설치를 전제로 최초 등록 자동 승인. 실행 중인 동일 자리의 중복 설치는 차단한다.
+    auto_approve_installations: bool = True
     database_url: str = "sqlite+aiosqlite:///./dcu_monitoring.db"
     api_key: str = "dcu-secret-key-change-in-production"
     cors_origins: list[str] = ["http://localhost:3000", "http://frontend:3000"]

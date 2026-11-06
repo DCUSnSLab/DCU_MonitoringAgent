@@ -29,6 +29,8 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://dcu:dcu1234@db:5432/dcu_monitoring
       API_KEY: dcu-secret-key-change-in-production
+      AUTO_APPROVE_INSTALLATIONS: ${AUTO_APPROVE_INSTALLATIONS:-true}
+      ALLOW_LEGACY_AGENTS: ${ALLOW_LEGACY_AGENTS:-true}
       CORS_ORIGINS: '["http://localhost:3000","http://frontend:3000"]'
       OTA_FILES_DIR: /app/ota_files
       # 대시보드 관리자 로그인: server/.env 의 값을 전달 (비밀번호가 비어 있으면 로그인 불가)

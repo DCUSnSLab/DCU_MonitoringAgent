@@ -58,19 +58,21 @@ def test_agent_id_format_keeps_hostname_and_last_6_hex():
     assert build_agent_id("D2-521-01", "047C16EC0E33") == "D2-521-01-EC0E33"
 
 
-def test_config_replaces_stored_id_with_derived(monkeypatch, tmp_path):
-    """설정 파일에 (블루투스 MAC 등으로 만든) 다른 ID 가 있어도 고정 ID 로 바꾸고 저장"""
+def test_config_preserves_legacy_id_on_unknown_hostname(monkeypatch, tmp_path):
+    """자리 형식이 아닌 호스트는 기존 ID를 보존하고 식별 상태만 저장한다."""
     monkeypatch.setattr(mid, "get_physical_mac", lambda sources=None: "047C16EC0E33")
     monkeypatch.setenv("COMPUTERNAME", "D2-521-01")
     path = tmp_path / "agent_config.yaml"
     path.write_text('agent:\n  id: "D2-521-01-0087C5"\n  version: "1.0.30"\n', encoding="utf-8")
 
+    monkeypatch.setattr("socket.gethostname", lambda: "DESKTOP-OLD")
     cfg = ConfigManager(str(path)).config
-    assert cfg.agent.id == "D2-521-01-EC0E33"
-    assert yaml.safe_load(path.read_text(encoding="utf-8"))["agent"]["id"] == "D2-521-01-EC0E33"
+    assert cfg.agent.id == "D2-521-01-0087C5"
+    assert (tmp_path / "installation.json").exists()
 
 
 def test_config_keeps_stored_id_when_no_physical_adapter(monkeypatch, tmp_path):
+    monkeypatch.setattr("socket.gethostname", lambda: "DESKTOP-OLD")
     monkeypatch.setattr(mid, "get_physical_mac", lambda sources=None: "")
     path = tmp_path / "agent_config.yaml"
     path.write_text('agent:\n  id: "D2-521-01-0087C5"\n', encoding="utf-8")
@@ -78,6 +80,7 @@ def test_config_keeps_stored_id_when_no_physical_adapter(monkeypatch, tmp_path):
 
 
 def test_config_generates_fallback_id_when_nothing_available(monkeypatch, tmp_path):
+    monkeypatch.setattr("socket.gethostname", lambda: "DESKTOP-OLD")
     monkeypatch.setattr(mid, "get_physical_mac", lambda sources=None: "")
     monkeypatch.setenv("COMPUTERNAME", "D2-521-01")
     path = tmp_path / "agent_config.yaml"

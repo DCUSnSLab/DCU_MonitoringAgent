@@ -118,6 +118,7 @@ class AgentRegistration(BaseModel):
 
 
 class StatusReport(BaseModel):
+    installation_id: Optional[str] = None
     """주기적 상태 보고 데이터"""
     message_type: str = "status_report"
     agent_id: str

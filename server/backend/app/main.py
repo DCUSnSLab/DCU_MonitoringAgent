@@ -14,6 +14,7 @@ import app.dashboard_models  # noqa: F401 — create_all에 SSO 테이블 등록
 from app.routers import agents, auth, dashboard, ws, ota, statistics
 from app.routers import sso
 from app.routers import dashboard_admin
+from app.routers import hardware
 from app.services import agent_service
 from app.services.report_aggregator import report_aggregator, report_stats, write_buckets
 from app.services.ws_manager import ws_manager
@@ -164,6 +165,8 @@ async def _retention_cleanup():
 # create_all 은 이미 있는 테이블에 열을 추가하지 않는다. 운영 DB(PostgreSQL)에 새 열을 넣을 때 여기에 적는다.
 # (SQLite 테스트 DB 는 매번 새로 만들어 create_all 로 열이 생기므로 건너뛴다)
 _COLUMN_ADDITIONS = (
+    # GEN-1773: 기존 행은 자리 미확인으로 보존. 이 단계에서는 ID/이력을 병합하지 않는다.
+    "ALTER TABLE agents ADD COLUMN IF NOT EXISTS seat_confirmed BOOLEAN NOT NULL DEFAULT false",
     # GEN-1692: OTA 배포 채널
     "ALTER TABLE ota_releases ADD COLUMN IF NOT EXISTS channel VARCHAR(16) NOT NULL DEFAULT 'stable'",
     "CREATE INDEX IF NOT EXISTS ix_ota_releases_channel ON ota_releases (channel)",
@@ -184,6 +187,8 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _apply_column_additions(conn)
+        from app.reference_migration import apply
+        await apply(conn)
     logger.info("DB 테이블 초기화 완료")
 
     # 백그라운드 오프라인 감지 시작
@@ -230,6 +235,7 @@ app.add_middleware(
 
 # 라우터 등록
 app.include_router(agents.router)
+app.include_router(hardware.router)
 app.include_router(auth.router)
 app.include_router(sso.router)
 app.include_router(dashboard_admin.router)

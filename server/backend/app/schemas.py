@@ -78,6 +78,7 @@ class AgentRegisterRequest(BaseModel):
 
 
 class StatusReportRequest(BaseModel):
+    installation_id: Optional[str] = None
     agent_id: str
     hostname: str = ""
     ip_address: str = ""
@@ -99,6 +100,7 @@ class StatusReportRequest(BaseModel):
 class AgentOfflineRequest(BaseModel):
     """에이전트 종료 시 서버에 전송하는 명시적 오프라인 보고"""
     agent_id: str
+    installation_id: Optional[str] = None
 
 
 # ─── 서버 → 대시보드 응답 ─────────────────────────────────────────

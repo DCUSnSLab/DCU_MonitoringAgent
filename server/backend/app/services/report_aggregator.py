@@ -190,6 +190,9 @@ class MinuteAggregator:
     def sample_time(self, req: StatusReportRequest, now: datetime) -> datetime:
         """이 보고를 넣을 시각 (UTC). 실시간 보고는 수신 시각, 재전송 보고는 보정한 에이전트 시각."""
         agent_ts = req.timestamp
+        # GEN-1773: 새 설치의 시간대가 명시된 버퍼는 첫 실시간 보고 이전에도 원래 분에 귀속한다.
+        if req.installation_id and req.active_detections is None and agent_ts is not None and agent_ts.tzinfo is not None:
+            return agent_ts.astimezone(timezone.utc)
         if agent_ts is not None and agent_ts.tzinfo is not None:
             agent_ts = agent_ts.astimezone(timezone.utc).replace(tzinfo=None)
         live = req.active_detections is not None

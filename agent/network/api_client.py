@@ -51,7 +51,10 @@ class ApiClient:
         client.stop()                           # 종료
     """
 
-    def __init__(self, config: ServerConfig, agent_id: str, on_connected=None):
+    def __init__(self, config: ServerConfig, agent_id: str, on_connected=None, identity=None):
+        # GEN-1773: 직접 생성한 구형/테스트 클라이언트는 기존 경로를 유지한다.
+        from agent.network.installation import InstallationSync
+        self._installation = InstallationSync(identity) if identity else None
         self._config = config
         self._agent_id = agent_id
         self._session = requests.Session()
@@ -110,7 +113,14 @@ class ApiClient:
 
         보고서를 JSON 으로 한 번만 직렬화해 그대로 보낸다 (dict 로 되돌렸다가 다시 직렬화하지 않음).
         """
-        body = report.json(exclude=REPORT_EXCLUDE).encode("utf-8")
+        if self._installation and not self._installation.ready.is_set():
+            return False
+        exclude = dict(REPORT_EXCLUDE)
+        if self._installation:
+            exclude.update(hostname=True, mac_address=True)
+            report = report.copy(update={"installation_id": self._installation.identity.state["installation_id"],
+                                         "timestamp": report.timestamp.astimezone()})
+        body = report.json(exclude=exclude).encode("utf-8")
 
         success, resp_data = self._post_with_response("/api/agents/report", body=body)
 
@@ -130,7 +140,12 @@ class ApiClient:
 
     def send_offline_status(self) -> bool:
         """에이전트 종료 시 서버에 오프라인 상태임을 알립니다."""
-        return self._post("/api/agents/offline", {"agent_id": self._agent_id})
+        if self._installation and not self._installation.ready.is_set():
+            return False
+        payload = {"agent_id": self._agent_id}
+        if self._installation:
+            payload["installation_id"] = self._installation.identity.state["installation_id"]
+        return self._post("/api/agents/offline", payload)
 
     def check_connection(self) -> bool:
         """서버 연결 가능 여부를 확인합니다."""
@@ -155,6 +170,17 @@ class ApiClient:
 
         while self._running:
             try:
+                if self._installation:
+                    if not self._registered and self.check_connection():
+                        if self._on_connected:
+                            self._on_connected()
+                        self._registered = True
+                    # 사양 동기화 실패가 일반 보고를 막지는 않는다. 등록 성공 후 ready 설정.
+                    self._installation.prepare(self)
+                    if self._installation.ready.is_set():
+                        self._flush_offline_buffer()
+                    time.sleep(retry_interval)
+                    continue
                 # 서버 연결 확인 및 등록
                 if not self._registered:
                     if self.check_connection():
@@ -193,6 +219,17 @@ class ApiClient:
                 with open(filepath, "r", encoding="utf-8") as f:
                     data = json.load(f)
 
+                if self._installation:
+                    state = self._installation.identity.state
+                    allowed = {state["agent_id"], state.get("legacy_agent_id")}
+                    if data.get("agent_id") not in allowed or data.get("installation_id") not in (None, state["installation_id"]):
+                        continue  # 다른 자리/설치의 버퍼를 재귀속하지 않는다.
+                    data.update(agent_id=state["agent_id"], installation_id=state["installation_id"])
+                    if data.get("timestamp"):
+                        data["timestamp"] = datetime.fromisoformat(data["timestamp"]).astimezone().isoformat()
+                    data.pop("hostname", None)
+                    data.pop("mac_address", None)
+                    data.pop("active_detections", None)
                 if self._post("/api/agents/report", data):
                     os.remove(filepath)
                     sent += 1
@@ -214,6 +251,9 @@ class ApiClient:
             filepath = os.path.join(self._buffer_dir, f"report_{timestamp}.json")
             # 현재 탐지 목록은 보고 시점의 휘발성 상태라 저장하지 않는다.
             # (나중에 재전송될 때 서버의 "현재 탐지 중"을 과거 값으로 덮어쓰지 않도록, 필드 자체를 뺀다)
+            if self._installation:
+                report = report.copy(update={"installation_id": self._installation.identity.state["installation_id"],
+                                             "timestamp": report.timestamp.astimezone()})
             with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(report.dict(exclude={"active_detections": True, **REPORT_EXCLUDE}),
                           f, ensure_ascii=False, default=str)
@@ -233,6 +273,13 @@ class ApiClient:
         files = sorted(
             (f for f in os.listdir(self._buffer_dir) if f.endswith(".json")),
         )
+        # GEN-1773: 파일 수 외에도 최대 120일 보관.
+        cutoff = time.time() - 120 * 86400
+        for filename in list(files):
+            path = os.path.join(self._buffer_dir, filename)
+            if os.path.getmtime(path) < cutoff:
+                os.remove(path)
+                files.remove(filename)
         while len(files) > max_size:
             oldest = os.path.join(self._buffer_dir, files.pop(0))
             try:

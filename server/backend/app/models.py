@@ -12,8 +12,8 @@ from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import (
-    Boolean, Date, DateTime, Float, ForeignKey,
-    Index, Integer, String, Text, UniqueConstraint, func,
+    BigInteger, Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey,
+    Index, Integer, String, Text, UniqueConstraint, Uuid, func, text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -27,6 +27,8 @@ class Agent(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     agent_id: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
     hostname: Mapped[str] = mapped_column(String(256), nullable=False)
+    # 기존 MAC 기반 ID를 자리 코드로 추측해 확정하지 않는다. 등록/이관 단계에서 명시적으로 변경한다.
+    seat_confirmed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     lab_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     ip_address: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     mac_address: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
@@ -55,7 +57,8 @@ class Agent(Base):
 
     # 관계
     reports: Mapped[list["StatusReportDB"]] = relationship(
-        "StatusReportDB", back_populates="agent", cascade="all, delete-orphan"
+        "StatusReportDB", back_populates="agent", cascade="all, delete-orphan",
+        foreign_keys="StatusReportDB.agent_id",
     )
 
 
@@ -67,6 +70,10 @@ class StatusReportDB(Base):
     기존 데이터 정리 방법은 migrations/2026-10-20_report_minutely.sql 참고.
     """
     __tablename__ = "status_reports"
+
+    # GEN-1773: 고정 내부 키. 문자열 ID는 구형 조회/호환을 위해 유지한다.
+    agent_pk: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("agents.id", ondelete="CASCADE"), nullable=True, index=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     agent_id: Mapped[str] = mapped_column(
@@ -90,12 +97,16 @@ class StatusReportDB(Base):
     foreground_window: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
 
     # 관계
-    agent: Mapped["Agent"] = relationship("Agent", back_populates="reports")
+    agent: Mapped["Agent"] = relationship("Agent", back_populates="reports", foreign_keys=[agent_id])
 
 
 class AlertLogDB(Base):
     """개별 알림 이력"""
     __tablename__ = "alert_logs"
+
+    # GEN-1773: 고정 내부 키. 문자열 ID는 구형 조회/호환을 위해 유지한다.
+    agent_pk: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("agents.id", ondelete="CASCADE"), nullable=True, index=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     # 예전 status_reports 행 번호. 새 알림은 비워 둔다 (보고 이력을 1분 집계로 바꾸면서 연결을 끊음).
@@ -125,6 +136,10 @@ class AgentStatusMinute(Base):
         UniqueConstraint("agent_id", "minute", name="uq_agent_status_minute"),
         Index("ix_agent_status_minutes_minute", "minute"),
     )
+
+    # GEN-1773: 고정 내부 키. 문자열 ID는 구형 조회/호환을 위해 유지한다.
+    agent_pk: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("agents.id", ondelete="CASCADE"), nullable=True, index=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     agent_id: Mapped[str] = mapped_column(
@@ -171,6 +186,10 @@ class BlockedSiteDailyStat(Base):
         ),
     )
 
+    # GEN-1773: 고정 내부 키. 문자열 ID는 구형 조회/호환을 위해 유지한다.
+    agent_pk: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("agents.id", ondelete="CASCADE"), nullable=True, index=True)
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     agent_id: Mapped[str] = mapped_column(
         String(128), ForeignKey("agents.agent_id", ondelete="CASCADE"), index=True
@@ -205,3 +224,100 @@ class OTARelease(Base):
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class AgentHardware(Base):
+    """자리별 최신 사양 요약. 사용률은 기존 agents/agent_status_minutes에서 관리한다."""
+    __tablename__ = "agent_hardware"
+    __table_args__ = (
+        CheckConstraint("memory_total_bytes >= 0", name="ck_hardware_memory_nonnegative"),
+    )
+
+    agent_pk: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True)
+    memory_total_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class _HardwareDevice:
+    """모델명이 같은 장치도 구분한다. 조회하지 못한 사양은 0 대신 NULL로 저장한다."""
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    agent_pk: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    device_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    model: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+
+
+class AgentCPU(_HardwareDevice, Base):
+    __tablename__ = "agent_cpus"
+    __table_args__ = (
+        UniqueConstraint("agent_pk", "device_key", name="uq_agent_cpu_device"),
+        CheckConstraint("physical_cores > 0", name="ck_cpu_cores_positive"),
+        CheckConstraint("logical_processors > 0", name="ck_cpu_threads_positive"),
+    )
+    physical_cores: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    logical_processors: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+
+class AgentGPU(_HardwareDevice, Base):
+    __tablename__ = "agent_gpus"
+    __table_args__ = (
+        UniqueConstraint("agent_pk", "device_key", name="uq_agent_gpu_device"),
+        CheckConstraint("dedicated_memory_bytes >= 0", name="ck_gpu_memory_nonnegative"),
+        CheckConstraint("gpu_type IN ('integrated', 'discrete')", name="ck_gpu_type"),
+    )
+    vendor: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    dedicated_memory_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    gpu_type: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+
+
+class AgentDisk(_HardwareDevice, Base):
+    __tablename__ = "agent_disks"
+    __table_args__ = (
+        UniqueConstraint("agent_pk", "device_key", name="uq_agent_disk_device"),
+        CheckConstraint("capacity_bytes >= 0", name="ck_disk_capacity_nonnegative"),
+        CheckConstraint("media_type IN ('ssd', 'hdd')", name="ck_disk_media_type"),
+    )
+    capacity_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    media_type: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+
+
+class AgentNetworkAdapter(Base):
+    __tablename__ = "agent_network_adapters"
+    __table_args__ = (
+        UniqueConstraint("agent_pk", "device_key", name="uq_agent_network_device"),
+        CheckConstraint("adapter_type IN ('ethernet', 'wifi', 'other')", name="ck_network_adapter_type"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    agent_pk: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    device_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    name: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    mac_address: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    adapter_type: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    is_physical: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+
+
+class AgentInstallation(Base):
+    """설치 이력. UUID는 식별값이며 인증은 별도 토큰으로 한다. API는 다음 단계에서 추가한다."""
+    __tablename__ = "agent_installations"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'active', 'revoked')", name="ck_installation_status"),
+        CheckConstraint("status != 'active' OR (token_hash IS NOT NULL AND approved_at IS NOT NULL)",
+                        name="ck_active_installation_credentials"),
+        Index("uq_agent_active_installation", "agent_pk", unique=True,
+              postgresql_where=text("status = 'active'"), sqlite_where=text("status = 'active'")),
+    )
+    installation_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True)
+    agent_pk: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending")
+    registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    token_hash: Mapped[Optional[str]] = mapped_column(String(64), unique=True, nullable=True)
+
+
+class AgentIDAlias(Base):
+    """구형 ID 매핑. 현재 ID와의 충돌 검사 및 실제 병합은 후속 이관 처리에서 수행한다."""
+    __tablename__ = "agent_id_aliases"
+    legacy_agent_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_pk: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

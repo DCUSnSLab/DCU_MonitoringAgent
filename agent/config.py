@@ -268,17 +268,11 @@ class ConfigManager:
                     print(f"[Config] Error syncing config from update: {e}")
                     pass
 
-        # 에이전트 ID: 물리 랜카드 MAC 으로 고정 계산한 값을 쓴다 (설정 파일이 지워져도 같은 PC 면 같은 ID).
-        # 못 구하면 저장된 ID 를 쓰고, 그것도 없으면 예비 ID 를 만든다.
-        derived_id = self._derive_agent_id()
-        if derived_id and derived_id != self._config.agent.id:
-            if self._config.agent.id:
-                print(f"[Config] 에이전트 ID 를 물리 랜카드 기준으로 변경: {self._config.agent.id} → {derived_id}")
-            self._config.agent.id = derived_id
-            self._save_quietly()
-        elif not self._config.agent.id:
-            self._config.agent.id = self._generate_agent_id()
-            self._save_quietly()
+        # GEN-1773: 기존 ID를 읽은 뒤 한 번만 전환. 정책 YAML 갱신과 식별 상태를 분리한다.
+        from agent.identity import Identity
+        self.identity = Identity(os.path.join(os.path.dirname(self._config_path), "installation.json"))
+        self._config.agent.id = self.identity.initialize(
+            self._config.agent.id, lambda: self._derive_agent_id() or self._generate_agent_id())
 
         return self._config
 
